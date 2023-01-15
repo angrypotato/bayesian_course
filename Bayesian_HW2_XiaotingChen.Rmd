@@ -1,0 +1,376 @@
+---
+title: "Bayesian HW2"
+author: "Xiaoting Chen"
+date: "2022-10-11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 4.2
+
+![](4.2.a.jpeg)
+### 4.2.a
+```{r 4.2.a}
+prior.a1 <- 120
+prior.b1 <- 10
+n1 <- 10
+sum.y1 <- 12+9+12+14+13+13+15+8+15+6
+
+prior.a2 <- 12
+prior.b2 <- 1
+n2 <- 13
+sum.y2 <- 11+11+10+9+9+8+7+10+6+8+8+9+7
+
+post.a1 <- prior.a1+sum.y1
+post.b1 <- prior.b1+n1
+
+post.a2 <- prior.a2+sum.y2
+post.b2 <- prior.b2+n2
+
+nsim <- 5000
+theta1.post <- rep(0,nsim)
+theta2.post <- rep(0,nsim)
+
+set.seed(0) 
+for(i in 1:nsim){
+	theta1.post[i] <- rgamma(1,post.a1,post.b1)
+	theta2.post[i] <- rgamma(1,post.a2,post.b2)
+}
+
+sum(theta1.post > theta2.post)/nsim
+```
+
+### 4.2.b
+```{r 4.2.b}
+prior.a1 <- 120
+prior.b1 <- 10
+n1 <- 10
+sum.y1 <- 12+9+12+14+13+13+15+8+15+6
+post.a1 <- prior.a1+sum.y1
+post.b1 <- prior.b1+n1
+
+n2 <- 13
+sum.y2 <- 11+11+10+9+9+8+7+10+6+8+8+9+7
+
+n.0 <- c(1:1000)
+nsim <- 5000
+theta1.post <- rep(0,nsim)
+theta2.post <- rep(0,nsim)
+post.probability <- rep(0,length(n.0))
+
+set.seed(0) 
+
+for (i in 1:length(n.0)) {
+  prior.a2 <- 12*n.0[i]
+  prior.b2 <- n.0[i]
+  post.a2 <- prior.a2+sum.y2
+  post.b2 <- prior.b2+n2
+  
+  for(j in 1:nsim){
+    theta1.post[j] <- rgamma(1,post.a1,post.b1)
+    theta2.post[j] <- rgamma(1,post.a2,post.b2)
+  }
+  
+  post.probability[i] <- sum(theta1.post > theta2.post)/nsim
+}
+
+plot(x=n.0, y=post.probability)
+```
+According to the plot, the probability of theta.a > theta.b conditional on data remains stable with only small fluctuations, even given a dramatic change in the prior distribution. So the conclusion about event theta.a > theta.b is not sensitive to the prior distribution of theta.b.
+
+### 4.2.c
+```{r 4.2.c}
+
+## using prior in part a 
+
+prior.a1 <- 120
+prior.b1 <- 10
+n1 <- 10
+sum.y1 <- 12+9+12+14+13+13+15+8+15+6
+
+prior.a2 <- 12
+prior.b2 <- 1
+n2 <- 13
+sum.y2 <- 11+11+10+9+9+8+7+10+6+8+8+9+7
+
+post.a1 <- prior.a1+sum.y1
+post.b1 <- prior.b1+n1
+
+post.a2 <- prior.a2+sum.y2
+post.b2 <- prior.b2+n2
+
+B <- 10000
+
+theta1.post.samples <- rep(0,B)
+theta2.post.samples <- rep(0,B)
+ytilde1.samples <- rep(0,B)
+ytilde2.samples <- rep(0,B)
+
+set.seed(0) 
+
+for(i in 1:B){
+
+	theta1.post.samples[i] <- rgamma(1,post.a1,post.b1)
+	theta2.post.samples[i] <- rgamma(1,post.a2,post.b2)
+	ytilde1.samples[i] <- rpois(1,theta1.post.samples[i])
+	ytilde2.samples[i] <- rpois(1,theta2.post.samples[i])
+
+}
+
+mean(ytilde1.samples > ytilde2.samples)
+
+```
+Using prior in part a, the probability of y.tilde.a > y.tilde.b is 0.7029 via Monte Carlo sampling with B=10000.
+
+
+```{r 4.2.c.}
+
+## using prior in part b
+
+prior.a1 <- 120
+prior.b1 <- 10
+n1 <- 10
+sum.y1 <- 12+9+12+14+13+13+15+8+15+6
+post.a1 <- prior.a1+sum.y1
+post.b1 <- prior.b1+n1
+
+n2 <- 13
+sum.y2 <- 11+11+10+9+9+8+7+10+6+8+8+9+7
+
+n.0 <- c(1:1000)
+nsim <- 5000
+theta1.post <- rep(0,nsim)
+theta2.post <- rep(0,nsim)
+post.probability <- rep(0,length(n.0))
+
+
+B <- 10000
+theta1.post.samples <- rep(0,B)
+theta2.post.samples <- rep(0,B)
+ytilde1.samples <- rep(0,B)
+ytilde2.samples <- rep(0,B)
+
+set.seed(0) 
+
+for (i in 1:length(n.0)) {
+  prior.a2 <- 12*n.0[i]
+  prior.b2 <- n.0[i]
+  post.a2 <- prior.a2+sum.y2
+  post.b2 <- prior.b2+n2
+  
+  for(j in 1:B){
+
+	theta1.post.samples[j] <- rgamma(1,post.a1,post.b1)
+	theta2.post.samples[j] <- rgamma(1,post.a2,post.b2)
+	ytilde1.samples[j] <- rpois(1,theta1.post.samples[j])
+	ytilde2.samples[j] <- rpois(1,theta2.post.samples[j])
+	}
+  
+  post.probability[i] <- mean(ytilde1.samples > ytilde2.samples)
+}
+
+plot(x=n.0, y=post.probability)
+mean(post.probability)
+```
+
+Using prior in part b, the probability of y.tilde.a > y.tilde.b is around 0.7 via Monte Carlo sampling regardless of change in prior of theta.b.
+
+
+
+## 4.8
+
+### 4.8.a
+```{r 4.8.a}
+bach <- read.table("menchild30bach.dat", fill = T)
+nobach <- read.table("menchild30nobach.dat", fill = T)
+
+data <- data.frame(sum = c(sum(bach, na.rm = TRUE), sum(nobach, na.rm = TRUE)),
+                   n = c(nrow(bach) * ncol(bach) - sum(is.na(bach)),
+                         nrow(nobach) * ncol(nobach) - sum(is.na(nobach))))
+data
+
+prior.a1 = prior.a2 = 2
+prior.b1 = prior.b2 = 1
+
+n1 <- data[[1,2]]
+sum.y1 <- data[[1,1]]
+
+n2 <- data[[2,2]]
+sum.y2 <- data[[2,1]]
+
+post.a1 <- prior.a1+sum.y1
+post.b1 <- prior.b1+n1
+
+post.a2 <- prior.a2+sum.y2
+post.b2 <- prior.b2+n2
+
+B <- 5000
+
+theta1.post.samples <- rep(0,B)
+theta2.post.samples <- rep(0,B)
+ytilde1.samples <- rep(0,B)
+ytilde2.samples <- rep(0,B)
+
+set.seed(0) 
+
+for(i in 1:B){
+
+	theta1.post.samples[i] <- rgamma(1,post.a1,post.b1)
+	theta2.post.samples[i] <- rgamma(1,post.a2,post.b2)
+	ytilde1.samples[i] <- rpois(1,theta1.post.samples[i])
+	ytilde2.samples[i] <- rpois(1,theta2.post.samples[i])
+
+}
+
+plot(seq(0,max(ytilde1.samples),by=1),as.numeric(table(ytilde1.samples))/B,type="n",xlab="Number of children",
+main="Posterior predictive distribution of number of children \n Men with bachelor degree",ylab="p(y | data)")
+for(i in 0:max(ytilde1.samples)){
+  segments(i,0,i,as.numeric(table(ytilde1.samples)/B)[i+1],col="black",lwd=6)
+}
+
+plot(seq(0,max(ytilde2.samples),by=1),as.numeric(table(ytilde2.samples))/B,type="n",xlab="Number of children",
+main="Posterior predictive distribution of number of children \n Men without bachelor degree",ylab="p(y | data)")
+for(i in 0:max(ytilde2.samples)){
+  segments(i,0,i,as.numeric(table(ytilde2.samples)/B)[i+1],col="black",lwd=6)
+}
+
+```
+
+
+### 4.8.b
+```{r 4.8.b}
+theta1.post.samples <- rep(0,B)
+theta2.post.samples <- rep(0,B)
+dtilde.theta<- rep(0,B)
+
+ytilde1.samples <- rep(0,B)
+ytilde2.samples <- rep(0,B)
+dtilde.samples <- rep(0,B)
+
+set.seed(0) 
+
+for(i in 1:B){
+
+	theta1.post.samples[i] <- rgamma(1,post.a1,post.b1)
+	theta2.post.samples[i] <- rgamma(1,post.a2,post.b2)
+	dtilde.theta[i] <- theta2.post.samples[i]-theta1.post.samples[i]
+	
+	ytilde1.samples[i] <- rpois(1,theta1.post.samples[i])
+	ytilde2.samples[i] <- rpois(1,theta2.post.samples[i])
+	dtilde.samples[i] <- ytilde2.samples[i]-ytilde1.samples[i]
+}
+
+theta_CI <- c(quantile(dtilde.theta,0.025),quantile(dtilde.theta,0.975))
+theta_CI
+
+sample_CI <- c(quantile(dtilde.samples,0.025),quantile(dtilde.samples,0.975))
+sample_CI
+```
+The 95% quantile-based posterior confidence intervals for theta.b - theta.a is [0.1501145, 0.7276939], for y.tilde.b - y.tilde.a is [-3, 4]. The lower bound of CI for event theta.b - theta.a is greater than 0, indicating the posterior average number of children of men without bachelor's degree is greater than that of men with bachelor's degree. It is also shown in the part a that men_w_bach most likely have 0 or 1 child, while men_no_bach most likely have 0 to 2 kids.
+
+
+### 4.8.c
+```{r 4.8.c}
+
+plot(seq(0,max(ytilde2.samples),by=1),as.numeric(table(ytilde2.samples))/B,type="n",xlab="Number of children",
+main="Empirical predictive distribution of number of children \n Men without bachelor degree",ylab="p(y | data)")
+for(i in 0:max(ytilde2.samples)){
+  segments(i,0,i,as.numeric(table(ytilde2.samples)/B)[i+1],col="black",lwd=6)
+}
+
+
+poison_1.4 <- rpois(5000,1.4)
+
+plot(seq(0,max(poison_1.4),by=1),as.numeric(table(poison_1.4))/B,type="n",xlab="Number of children",
+main="Poisson distribution with theta 1.4",ylab="p(y | data)")
+for(i in 0:max(poison_1.4)){
+  segments(i,0,i,as.numeric(table(poison_1.4)/B)[i+1],col="black",lwd=6)
+}
+```
+The empirical distribution of data in group B and the Poisson distribution with mean theta=1.4 have similar shapes, but the probability varies a lot for several data points, suggesting that Poisson model is not a good fit. 
+
+
+### 4.8.d
+```{r 4.8.d}
+df_4.8.d <- data.frame(n_0 = rep(NA,5000), n_1 = rep(NA,5000))
+
+for (i in 1:5000) {
+  sample <- rpois(218,theta2.post.samples[i])
+  df_4.8.d[i,1] <- sum(sample == 0)
+  df_4.8.d[i,2] <- sum(sample == 1)
+}
+
+plot(x=df_4.8.d[,1], y=df_4.8.d[,2], pch=20,xlab="Count of 0 child",,ylab="Count of 1 child", ylim=c(45,100))
+points(sum(nobach==0,na.rm = T),sum(nobach==1,na.rm = T),pch=20,col="red")
+
+```
+
+The red point is far away from the most dense area, so the poisson model is not a good fit.
+
+
+## 5.2
+
+```{r 5.2}
+### Prior distribution parameters
+mu.0 <- 75
+sigma2.0 <- 100
+kappa.0.seq = nu.0.seq = c(1,2,4,8,16,32)
+
+B <- 10000
+d_theta <- matrix(0,B,6)
+prob <- matrix(0,1,6)
+set.seed(0) 
+
+for (i in 1:length(kappa.0.seq)) {
+  
+  kappa.0 <- kappa.0.seq[i]
+  nu.0 <- nu.0.seq[i]
+    
+  ## group A
+  n1 <- 16
+  ybar.1 <- 75.2
+  s2.1 <- 7.3^2
+
+  post.mu.1 <- (kappa.0/(kappa.0+n1))*mu.0+(n1/(kappa.0+n1))*ybar.1
+  post.kappa.1 <- kappa.0+n1
+  post.nu.1 <- nu.0+n1
+  post.sigma2.1 <- (1/post.nu.1)*((nu.0*sigma2.0)+((n1-1)*s2.1)+(((kappa.0*n1)/(kappa.0+n1))*((ybar.1-mu.0)^2)))
+
+  ## group B
+  n2 <- 16
+  ybar.2 <- 77.5
+  s2.2 <- 8.1^2
+  
+  post.mu.2 <- (kappa.0/(kappa.0+n2))*mu.0+(n2/(kappa.0+n2))*ybar.2
+  post.kappa.2 <- kappa.0+n2
+  post.nu.2 <- nu.0+n2
+  post.sigma2.2 <- (1/post.nu.2)*((nu.0*sigma2.0)+((n2-1)*s2.2)+(((kappa.0*n2)/(kappa.0+n2))*((ybar.2-mu.0)^2)))
+  
+  ## sampling from the joint posterior distributions
+  sample.1 <- matrix(0,B,2)
+  sample.2 <- matrix(0,B,2)
+  for(j in 1:B){
+  # sampling sigma2
+  	sample.1[j,1] <- 1/rgamma(1,post.nu.1/2,(post.nu.1*post.sigma2.1)/2)
+  	sample.2[j,1] <- 1/rgamma(1,post.nu.2/2,(post.nu.2*post.sigma2.2)/2)
+  	
+  # sampling theta conditional on sigma2
+  	sample.1[j,2] <- rnorm(1,post.mu.1,sqrt(sample.1[j,1]/post.kappa.1))
+  	sample.2[j,2] <- rnorm(1,post.mu.2,sqrt(sample.2[j,1]/post.kappa.2))
+  	
+  	d_theta[j,i] <- sample.2[j,2] - sample.1[j,2]
+  }
+  
+  prob[1,i] <- sum(d_theta[,i] > 0)/B
+}
+
+prob
+
+## plot
+plot(x=kappa.0.seq,y=prob)
+```
+
+The conclusion for theta.a < theta.b is sensitive to the choice of prior, so not robust.

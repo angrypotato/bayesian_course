@@ -1,0 +1,604 @@
+---
+title: "HW5"
+author: "Xiaoting Chen"
+date: "2022-12-03"
+output: pdf_document
+---
+
+```{r setup, include=T, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(coda)
+library(ggplot2)
+library(MASS)
+library(MCMCpack)
+```
+
+## 8.3 
+
+### a. Approximate the posterior distribution
+
+Read in data
+```{r data,warning=FALSE, message=FALSE}
+library(readr)
+school1 <- read_csv("school1.dat", col_names = FALSE)
+school2 <- read_csv("school2.dat", col_names = FALSE)
+school3 <- read_csv("school3.dat", col_names = FALSE)
+school4 <- read_csv("school4.dat", col_names = FALSE)
+school5 <- read_csv("school5.dat", col_names = FALSE)
+school6 <- read_csv("school6.dat", col_names = FALSE)
+school7 <- read_csv("school7.dat", col_names = FALSE)
+school8 <- read_csv("school8.dat", col_names = FALSE)
+```
+
+Data overview
+```{r Data overview}
+school <- list(school1, school2, school3, school4,school5,school6,school7,school8)
+y <- as.data.frame(rbind(school1, school2, school3, school4,school5,school6,school7,school8))[,1]
+
+## Number of schools
+m <- 8
+
+## number of observation, mean, and variance per school 
+n.j <- rep(0,8)
+y.bar.school <- rep(0,m)
+s2.school <- rep(0,m)
+
+for (i in 1:8) {
+  school.j <- as.data.frame(school[i])[,1]
+  n.j[i] <- length(school.j)
+  y.bar.school[i] <- mean(school.j)
+  s2.school[i] <- var(school.j)
+}
+
+## Average of the school-specific mean and variances
+mean.y.bar.school <- mean(y.bar.school)
+mean.s2.school <- mean(s2.school)
+var.y.bar.school <- var(y.bar.school)
+
+```
+
+Sampling functions
+```{r Sampling functions}
+### Sampling functions
+
+sample.theta.j <- function(n.j,sigma2,mu,ybar.j,tau2){
+	
+	post.var <- 1/((n.j/sigma2)+(1/tau2))
+	post.mean <- post.var*(((n.j/sigma2)*ybar.j)+(mu/tau2))
+	
+	new.theta.j <- rnorm(1,post.mean,sqrt(post.var))
+	return(new.theta.j)
+	
+}
+
+
+sample.sigma2 <- function(n.j,y,theta.j,nu.0,sigma2.0,m,n){
+	
+	# here we create a vector of length equal to the number of observations
+	# where we have n_1 times theta_1, n_2 times theta_2,..., n_m times theta_m
+	theta.j.expanded <- NULL
+	for(i in 1:m){
+		theta.j.expanded <- c(theta.j.expanded,rep(theta.j[i],n.j[i]))	
+	}
+	
+	nu.n <- nu.0+sum(n.j)
+	sigma2.n <- (1/nu.n)*((nu.0*sigma2.0)+sum((y-theta.j.expanded)^2))
+	
+	new.sigma2 <- 1/rgamma(1,(nu.n/2),((nu.n*sigma2.n)/2))
+	return(new.sigma2)
+}
+
+
+sample.mu <- function(theta.j,m,tau2,mu.0,gamma2.0){
+		
+	post.var <- 1/((m/tau2)+(1/gamma2.0))
+	theta.bar <- mean(theta.j)
+	post.mean <- post.var*(((m/tau2)*theta.bar)+(mu.0/gamma2.0))
+	
+	new.mu <- rnorm(1,post.mean,sqrt(post.var))
+	return(new.mu)
+}
+
+
+sample.tau2 <- function(theta.j,m,mu,eta.0,tau2.0){
+	
+	eta.n <- m+eta.0
+	tau2.n <- (1/eta.n)*((eta.0*tau2.0)+sum((theta.j-mu)^2))
+	
+	new.tau2 <- 1/rgamma(1,(eta.n/2),((eta.n*tau2.n)/2))
+	return(new.tau2)
+}
+
+```
+
+Prior distributions
+```{r Prior distributions}
+mu.0 <- 7
+gamma2.0 <- 5
+tau2.0 <- 10
+eta.0 <- 2
+sigma2.0 <- 100
+nu.0 <- 2
+```
+
+Initial values
+```{r Initial values}
+init.theta.j <- y.bar.school
+init.mu <- mean.y.bar.school
+init.sigma2 <- mean.s2.school
+init.tau2 <- var.y.bar.school
+
+```
+
+Gibbs sampling algorithm
+```{r Gibbs}
+S <- 10000
+
+## store the school specific parameters, the theta_js in one matrix 
+theta.MCMC <- matrix(0,nrow=S,ncol=m)
+## store the other parameters, mu, sigma2, tau2, in a second matrix
+other.pars.MCMC <- matrix(0,S,ncol=3)
+new.theta.j <- rep(0,m)
+
+set.seed(0) 
+for(k in 1:S){
+
+	if(k==1){
+		theta.j <- init.theta.j
+		mu <- init.mu
+		sigma2 <- init.sigma2
+		tau2 <- init.tau2
+	}
+	
+	new.mu <- sample.mu(theta.j,m,tau2,mu.0,gamma2.0)
+	new.tau2 <- sample.tau2(theta.j,m,new.mu,eta.0,tau2.0) 
+	new.sigma2 <- sample.sigma2(n.j,y,theta.j,nu.0,sigma2.0,m,n)
+		
+	for(l in 1:m){
+		new.theta.j[l] <- sample.theta.j(n.j[l],new.sigma2,new.mu,y.bar.school[l],new.tau2)	
+	}
+	mu <- new.mu
+	tau2 <- new.tau2
+	sigma2 <- new.sigma2
+	theta.j <- new.theta.j
+	
+	theta.MCMC[k,] <- theta.j
+	other.pars.MCMC[k,] <- c(mu,sigma2,tau2)
+
+}
+```
+
+MCMC diagnostic
+```{r MCMC diagnostic}
+## Trace plots
+par(mfrow=c(2,2))
+plot(other.pars.MCMC[,1],xlab="Iteration number",ylab="mu",type="l")
+plot(other.pars.MCMC[,2],xlab="Iteration number",ylab="sigma2",type="l")
+plot(other.pars.MCMC[,3],xlab="Iteration number",ylab="tau2",type="l")
+
+par(mfrow=c(2,2))
+plot(theta.MCMC[,1],xlab="Iteration number",ylab="theta_1",type="l")
+plot(theta.MCMC[,2],xlab="Iteration number",ylab="theta_2",type="l")
+plot(theta.MCMC[,3],xlab="Iteration number",ylab="theta_3",type="l")
+plot(theta.MCMC[,4],xlab="Iteration number",ylab="theta_4",type="l")
+
+par(mfrow=c(2,2))
+plot(theta.MCMC[,5],xlab="Iteration number",ylab="theta_5",type="l")
+plot(theta.MCMC[,6],xlab="Iteration number",ylab="theta_6",type="l")
+plot(theta.MCMC[,7],xlab="Iteration number",ylab="theta_7",type="l")
+plot(theta.MCMC[,8],xlab="Iteration number",ylab="theta_8",type="l")
+
+
+## ACF plots
+par(mfrow=c(2,2))
+acf(other.pars.MCMC[,1],main="mu")
+acf(other.pars.MCMC[,2],main="sigma2")
+acf(other.pars.MCMC[,3],main="tau2")
+
+par(mfrow=c(2,2))
+acf(theta.MCMC[,1],main="theta_1")
+acf(theta.MCMC[,2],main="theta_2")
+acf(theta.MCMC[,3],main="theta_3")
+acf(theta.MCMC[,4],main="theta_4")
+
+par(mfrow=c(2,2))
+acf(theta.MCMC[,5],main="theta_5")
+acf(theta.MCMC[,6],main="theta_6")
+acf(theta.MCMC[,7],main="theta_7")
+acf(theta.MCMC[,8],main="theta_8")
+
+## Effective sample size
+effectiveSize(other.pars.MCMC[,1])
+effectiveSize(other.pars.MCMC[,2])
+effectiveSize(other.pars.MCMC[,3])
+
+effectiveSize(theta.MCMC[,1])
+effectiveSize(theta.MCMC[,2])
+effectiveSize(theta.MCMC[,3])
+effectiveSize(theta.MCMC[,4])
+effectiveSize(theta.MCMC[,5])
+effectiveSize(theta.MCMC[,6])
+effectiveSize(theta.MCMC[,7])
+effectiveSize(theta.MCMC[,8])
+
+burnin <- 2000
+L <- 1000
+batch <- rep(seq(1:8),each=L)
+
+## Box-plots of MCMC samples grouped in batches of L=1000 samples
+
+par(mfrow=c(1,1))
+boxplot(other.pars.MCMC[(burnin+1):S,1]~batch,ylab="Mu",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(other.pars.MCMC[(burnin+1):S,2]~batch,ylab="Sigma2",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,3]~batch,ylab="Tau2",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,1]~batch,ylab="Theta_1",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,2]~batch,ylab="Theta_2",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,3]~batch,ylab="Theta_3",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,4]~batch,ylab="Theta_4",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,5]~batch,ylab="Theta_5",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,6]~batch,ylab="Theta_6",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,7]~batch,ylab="Theta_7",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,8]~batch,ylab="Theta_8",xlab="Batch",col="grey")
+
+```
+The effective sample sizes for all parameters are above 1000.
+
+
+### b. Posterior means and 95% CI for sigma2, mu, tau2
+
+
+Mu
+```{r}
+## Mu
+mean(other.pars.MCMC[(burnin+1):S,1])
+quantile(other.pars.MCMC[(burnin+1):S,1],c(0.025,0.975))
+sd(other.pars.MCMC[(burnin+1):S,1])
+
+plot(density(other.pars.MCMC[(burnin+1):S,1]),col="black",lwd=2,lty=1,xlab="Mu",ylab="Posterior density",main="Mu")
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,1],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,1],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,1]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,1]),col="red",lwd=2,lty=1)
+
+## prior
+mu_prior = data.frame(
+  value = seq(3, 13, by = 0.1),
+  density = dnorm(seq(3, 13, by = 0.1), mu.0, sqrt(gamma2.0)),
+  distribution = 'prior'
+)
+
+## compare
+mu_post <- data.frame(mu = other.pars.MCMC[(burnin+1):S,1],
+                          distribution = "posterior")
+ggplot(mu_prior, aes(x = value, y = density, colour = distribution)) +
+  geom_line() + 
+  geom_density(mu_post, mapping = aes(x = mu, y = ..density..)) +
+  xlab('Mu')
+```
+
+Sigma2
+```{r}
+mean(other.pars.MCMC[(burnin+1):S,2])
+quantile(other.pars.MCMC[(burnin+1):S,2],c(0.025,0.975))
+sd(other.pars.MCMC[(burnin+1):S,2])
+
+plot(density(other.pars.MCMC[(burnin+1):S,2]),col="black",lwd=2,lty=1,xlab="Sigma^2",ylab="Posterior density",main="Sigma^2")
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,2],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,2],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,2]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,2]),col="red",lwd=2,lty=1)
+
+## prior
+sigma2_prior <- data.frame(
+  value = seq(9, 25, by = 0.1),
+  density = dinvgamma(seq(9, 25, by = 0.1), nu.0 / 2, nu.0 * sigma2.0 / 2),
+  distribution = 'prior'
+)
+
+## compare
+sigma2_post <- data.frame(sigma2 = other.pars.MCMC[(burnin+1):S,2],
+                          distribution = "posterior")
+ggplot(sigma2_prior, aes(x = value, y = density, colour = distribution)) +
+  geom_line() + 
+  geom_density(sigma2_post, mapping = aes(x = sigma2, y = ..density..)) +
+  xlab('Sigma^2')
+
+```
+
+Tau2
+```{r}
+mean(other.pars.MCMC[(burnin+1):S,3])
+quantile(other.pars.MCMC[(burnin+1):S,3],c(0.025,0.975))
+sd(other.pars.MCMC[(burnin+1):S,3])
+
+plot(density(other.pars.MCMC[(burnin+1):S,3]),col="black",lwd=2,lty=1,xlab="Tau^2",ylab="Posterior density",main="Tau^2")
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,3],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,3],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,3]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,3]),col="red",lwd=2,lty=1)
+
+## prior
+tau2_prior <- data.frame(
+  value = seq(0, 40, by = 0.1),
+  density = dinvgamma(seq(0, 40, by = 0.1), eta.0 / 2, eta.0 * tau2.0 / 2),
+  distribution = 'prior'
+)
+
+## compare
+tau2_post <- data.frame(tau2 = other.pars.MCMC[(burnin+1):S,3],
+                          distribution = "posterior")
+ggplot(tau2_prior, aes(x = value, y = density, colour = distribution)) +
+  geom_line() + 
+  geom_density(tau2_post, mapping = aes(x = tau2, y = ..density..)) +
+  xlab('Tau^2')
+
+```
+For mu and tau2, the mean of prior and posterior distributions are close, but posterior distributions have smaller variance. But the prior of sigma2 is more like a noninformative prior, the posterior distribution is mostly decided by the data.
+
+### c.
+
+```{r}
+## posterior
+R.post <- data.frame(
+  value =  other.pars.MCMC[(burnin+1):S,3] / (other.pars.MCMC[(burnin+1):S,3] + other.pars.MCMC[(burnin+1):S,2]),
+  distribution = 'posterior'
+)
+mean(R.post$value)
+
+## prior
+tau2_prior <- (1 / rgamma(1e6, eta.0 / 2, eta.0 * tau2.0 / 2))
+sigma2_prior <- (1 / rgamma(1e6, nu.0 / 2, nu.0 * sigma2.0 / 2))
+R.prior <- data.frame(
+  value = (tau2_prior) / (tau2_prior + sigma2_prior),
+  distribution = 'prior'
+)
+mean(R.prior$value)
+
+ggplot(R.prior, aes(x = value, y = ..density.., color = distribution)) +
+  geom_density(data = R.prior) +
+  geom_density(data = R.post)
+
+```
+Describe the evidence for between-school variation:\
+R is the measurement of between-group variance. In light of the data, the between-group variance increased from 17% (R.prior) to 25% (from R.post), thus there exists between-group variance in the data.
+
+
+
+### d.
+
+the posterior probability that theta_7 is smaller than theta_6, and the posterior probability that theta_7 is the smallest of all the theta’s
+```{r}
+theta7_smaller_6 <- mean(theta.MCMC[(burnin+1):S,7] < theta.MCMC[(burnin+1):S,6])
+theta7_smaller_6
+
+theta7_smallest <- mean(apply(theta.MCMC[(burnin+1):S, ], 1, which.min) == 7)
+theta7_smallest
+```
+
+### e.
+
+```{r}
+y.post <- apply(theta.MCMC[(burnin+1):S, ], 2, mean)
+y <- data.frame(posterior.mean = y.post, sample.mean = y.bar.school)
+
+ggplot(y, aes(x = sample.mean, y = posterior.mean)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) 
+
+
+## posterior mean of mu
+mean(other.pars.MCMC[(burnin+1):S,1])
+
+## sample mean of all observations
+mean(y.bar.school)
+```
+
+The sample average and the posterior expectation values are basically the same, the sample mean of all observations and the posterior mean of mu are very close too (7.64589 and 7.568985).\
+Shrinkage can be observed in schools with very high and low sample averages. The farther the dots are from the 45 degree line, the stronger the shrinkage.
+
+
+
+## 10.2
+
+Read in data
+```{r}
+sparrow <- read.table("~/Documents/NYU/bayesian/hw/hw5/msparrownest.dat", quote="\"", comment.char="")
+```
+
+### a.
+
+![](10_2_a.jpg)
+
+### b.
+
+Consider the form $\text{logit}(\theta_i) = a + \beta x_i$
+Consider normal distribution as prior for both $\alpha$ and $\beta$, and both centered around 0 for simplicity. \
+Logit value must be in [0, 1] when x ranges over 10 to 15. \
+To suffice that, when $\alpha = 0$, $\beta$ should be approximately between -1 to 1; when $\beta = 0$, $\alpha$ should be approximately between -10 to 10.\
+Thus we can pose the following prior for $\alpha$ and $\beta$:\
+$$
+alpha \sim \mathcal{N}(0, 25)
+$$
+
+$$
+beta \sim \mathcal{N}(0, 0.25) 
+$$
+### c.
+
+data
+```{r}
+y <- sparrow[,1]
+n <- length(y)
+x <- cbind(rep(1, n), sparrow[, 2]) ## intercept + wingspan
+p <- 2
+```
+
+Prior
+```{r}
+mu0 = c(0, 0)
+sigma0 = sqrt(c(25, 0.25))
+```
+Proposal variance
+```{r}
+sigma2.hat <- var(log(y+0.5))
+V <- 5*solve((t(x)%*%x))
+```
+
+Functions to sample from distribution
+```{r}
+log.p.y = function(x, y, theta) {
+  exp_term = exp(x %*% theta)
+  p = exp_term / (1 + exp_term)
+  sum(dbinom(y, 1, p, log = TRUE))
+}
+
+p.theta = function(theta) {
+  sum(dnorm(theta, mu0, sigma0, log = TRUE))
+}
+```
+
+Running the Metropolis algorithm
+```{r}
+S <- 10000
+
+## Initial value for theta
+theta.init <- c(0,0)
+
+## store the output in a matrix
+theta.MCMC <- matrix(0,nrow=S,ncol=p)
+
+accept <- 0
+
+set.seed(0) 
+
+for(k in 1:S){
+  
+  if(k==1){
+    theta <- theta.init   
+    }
+  
+  theta.star <- mvrnorm(1, theta, V) 
+  r = exp(log.p.y(x, y, theta.star) + p.theta(theta.star) -
+  log.p.y(x, y, theta) - p.theta(theta))
+        
+  # drawing a u~Unif(0,1)
+  u <- runif(1,0,1)
+
+  # deciding whether to accept or reject
+  if(u<r){
+    new.theta <- theta.star
+    accept <- accept +1
+    }
+  else{
+    new.theta <- theta
+    }
+  theta <- new.theta
+  theta.MCMC[k,] <- theta
+    
+}
+
+accept.rate <- accept/S
+accept.rate
+```
+The current acceptance rate (46%) is reasonable.
+
+
+```{r}
+effectiveSize(theta.MCMC[,1])
+effectiveSize(theta.MCMC[,2])
+```
+Both effective sample sizes are above 1000.
+
+diagnostics
+```{r}
+## trace plots
+par(mfrow=c(1,2))
+plot(theta.MCMC[,1],ylab="Theta_1",xlab="Iteration",
+         main="Trace plot for theta_1",type="l",lwd=1,lty=1)
+plot(theta.MCMC[,1],ylab="Theta_2",xlab="Iteration",
+         main="Trace plot for theta_2",type="l",lwd=1,lty=1)
+
+## drop the first 2000 samples as a conservative choice
+burnin <- 2000
+
+## Autocorrelation function
+par(mfrow=c(1,2))
+for(j in 1:2){
+	acf(theta.MCMC[(burnin+1):S,j],main=paste("ACF for theta_",j),lag.max=100)
+}
+
+
+## Computing the lag-1 autocorrelation
+lag1.acf <- rep(0,2)
+for(j in 1:2){
+	lag1.acf[j] <- acf(theta.MCMC[(burnin+1):S,j],lag.max=1,plot=FALSE)$acf[2,1,1]
+}
+
+lag1.acf
+```
+
+### d.
+
+alpha
+```{r}
+alpha_prior <- data.frame(alpha.prior = rnorm(8000, 0, 5), distribution = 'prior')
+
+ggplot(alpha_prior) +
+  geom_density(aes(x=alpha.prior, y=..density.., color=distribution)) +
+  geom_density(data = data.frame(alpha=theta.MCMC[(burnin+1):S,1], distribution='posterior'), 
+               mapping = aes(x = alpha, y = ..density.., color=distribution)) 
+
+```
+
+
+beta
+```{r}
+beta_prior <- data.frame(beta.prior = rnorm(8000, 0, 0.5), distribution = 'prior')
+ 
+ggplot(beta_prior) +
+  geom_density(aes(x=beta.prior, y=..density.., color=distribution)) +
+  geom_density(data = data.frame(beta=theta.MCMC[(burnin+1):S,2], distribution='posterior'), 
+               mapping = aes(x = beta, y = ..density.., color=distribution)) 
+
+```
+Both ppsterior $\alpha$ and $\beta$ have lower variance than their prior distributions, centered to a certain value.
+
+### e.
+ 
+```{r}
+## cut the interval of x to draw many values and form the distribution
+x_seq <- seq(10, 15, length = 1000)
+
+## calculate the value of f_ab and its confidence interval
+quantiles <- sapply(x_seq, function(x) {
+  exp_term = exp(theta.MCMC[,1] + theta.MCMC[,2] * x)
+  f_ab = exp_term / (1 + exp_term)
+  quantile(f_ab, probs = c(0.025, 0.5, 0.975))
+})
+
+ggplot(data.frame(x=x_seq, prob=quantiles[2,], lower=quantiles[1,], upper=quantiles[3,]), 
+       aes(x = x, y = prob, ymin = lower, ymax = upper)) +
+  geom_line() +
+  geom_ribbon(fill = 'grey', alpha = 0.5)
+```
+

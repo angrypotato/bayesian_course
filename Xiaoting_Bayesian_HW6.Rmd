@@ -1,0 +1,547 @@
+---
+title: "HW6"
+author: "Xiaoting Chen"
+date: "2022-12-10"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE, message=F, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Required packages
+```{r}
+library(MASS)
+library(coda)
+library(MCMCpack)
+library(msm)
+```
+
+## Q 11.2
+
+Data
+```{r}
+pdensity <- read.csv("~/Documents/NYU/bayesian/hw/hw6/pdensity.dat", sep="")
+plt <- pdensity$plot
+m <- 10
+y <- pdensity$yield
+n <- length(y)
+den <- pdensity$density
+p <- 3
+X <- matrix(cbind(rep(1,n), den, den^2),nrow=n,ncol=p)
+n.j <- rep(8,10)
+```
+
+### 11.2.a
+
+OLS estimates of regression coefficients
+```{r}
+beta.ols <- matrix(0,nrow=m,ncol=p)
+var.plot <- rep(0,m)
+for(j in 1:m){
+	y.j <- y[which(plt==unique(plt)[j])]
+	den.j <- den[which(plt==unique(plt)[j])]
+	den.j.sq <- den.j^2
+	reg.j <- lm(y.j ~ den.j + den.j.sq)
+	beta.ols[j,] <- as.numeric(reg.j$coeff)
+	var.plot[j] <- (summary(lm(y.j ~ den.j + den.j.sq))$sigma)^2
+}
+```
+
+The heterogeneity of the least squares regression lines
+```{r}
+plot(seq(0,10,length=100),
+     beta.ols[1,1]+beta.ols[1,2]*seq(0,10,length=100)+beta.ols[1,3]*seq(0,10,length=100)^2,
+     xlab="Density",ylab="Yield",
+     col="grey",type="l")
+
+for(j in 2:m){
+ lines(seq(0,10,length=100),lwd=2,col="grey",
+       beta.ols[j,1]+beta.ols[j,2]*seq(0,10,length=100)+beta.ols[j,3]*seq(0,10,length=100)^2)
+}
+lines(seq(0,10,length=100),col="black",lwd=3,
+      mean(beta.ols[,1])+mean(beta.ols[,2])*seq(0,10,length=100)+mean(beta.ols[,3])*seq(0,10,length=100)^2)
+
+```
+
+Estimates of theta, Sigma, sigma2
+```{r}
+## theta
+mu_hat <- colMeans(beta.ols)
+mu_hat
+## Sigma
+S_hat <- cov(beta.ols)
+S_hat
+## sigma2
+s2_hat <- mean(var.plot)
+s2_hat
+```
+
+
+### 11.2.b
+
+Parameters of prior distributions
+```{r}
+## prior on theta
+mu0 <- mu_hat
+Lambda0 <- S_hat
+
+## prior on Sigma
+eta0 <- 5
+S0 <- S_hat
+
+## prior on sigma^2  
+nu0 <- 1
+sigma2.0 <- s2_hat
+```
+
+Functions to sample from full conditionals
+```{r}
+sample.beta<- function(y,X,n.j,p,m,group,theta,Sigma,sigma2){
+
+	new.beta <- matrix(0,m,p)
+	for(j in 1:m){
+		
+		# subsetting data
+		y.j <- y[group==unique(group)[j]]
+		X.j <- X[group==unique(group)[j],]
+		
+		post.var <- solve(solve(Sigma)+((t(X.j)%*%X.j)/sigma2))
+		post.mean <- post.var%*%((solve(Sigma)%*%matrix(theta,nrow=p,ncol=1)) + ((t(X.j)%*%matrix(y.j,nrow=n.j[j],ncol=1))/sigma2))
+		new.beta[j,] <- mvrnorm(1,post.mean,post.var)
+	}	
+	
+	return(new.beta)
+}
+
+
+sample.theta <- function(beta,m,p,Sigma,mu0,Lambda0){
+
+	beta.bar <- as.numeric(apply(beta,2,mean))
+	
+	post.var <- solve(solve(Lambda0)+m*solve(Sigma))
+	post.mean <- post.var%*%((solve(Lambda0)%*%matrix(mu0,nrow=p,ncol=1))+m*(solve(Sigma)%*%matrix(beta.bar,nrow=p,ncol=1)))
+	new.theta <- mvrnorm(1,post.mean,post.var)
+	return(new.theta)
+}
+
+
+sample.Sigma <- function(beta,theta,m,p,eta0,S0){
+	
+	eta.n <- eta0+m
+	S.theta <- matrix(0,nrow=p,ncol=p)
+	for(j in 1:m){
+		S.theta <- S.theta+(beta[j,]-theta)%*%t(beta[j,]-theta)
+	}
+	S.theta <- S0+S.theta
+	new.Sigma <- solve(rwish(eta.n,solve(S.theta)))
+	return(new.Sigma)
+}
+
+
+sample.sigma2 <- function(y,X,beta,group,m,n,n.j,nu0,sigma2.0){
+	
+	nu.n <- nu0+n
+	sse <- 0
+	for(j in 1:m){
+		y.j <- y[group==unique(group)[j]]
+		X.j <- X[group==unique(group)[j],]
+		sse <- sse + (t(matrix(y.j,nrow=n.j[j],ncol=1) -X.j%*%matrix(beta[j,],nrow=p,ncol=1))%*%(matrix(y.j,nrow=n.j[j],ncol=1) -X.j%*%matrix(beta[j,],nrow=p,ncol=1)))
+	}
+	sigma2.n <- (1/nu.n)*((nu0*sigma2.0)+sse)
+	new.sigma2 <- 1/rgamma(1,nu.n/2,(nu.n*sigma2.n)/2)
+	return(new.sigma2)
+}
+```
+
+### 11.2.c 
+
+Use a Gibbs sampler to approximate posterior distributions.\
+
+Run Gibbs and store the samples
+```{r Gibbs}
+S <- 20000
+
+## Initial values 
+init.beta <- beta.ols
+init.sigma2 <- s2_hat
+init.Sigma <- S_hat   ## 3 x 3
+init.theta <- mu_hat
+
+## store the MCMC samples 
+beta.MCMC <- array(0,dim=c(m,p,S))
+sigma2.MCMC <- rep(0,S)
+theta.MCMC <- matrix(0,S,p)
+Sigma.MCMC <- matrix(0,S,6)
+pred.beta <- matrix(0,S,p)
+
+
+## run gibbs algorithm
+set.seed(0)
+for(k in 1:S){
+	
+	if(k==1){
+		beta <- init.beta
+		sigma2 <- init.sigma2
+		Sigma <- init.Sigma
+		theta <- init.theta
+	}
+	
+
+	new.theta <- sample.theta(beta,m,p,Sigma,mu0,Lambda0)
+	new.Sigma <- sample.Sigma(beta,new.theta,m,p,eta0,S0)
+	new.sigma2 <- sample.sigma2(y,X,beta,plt,m,n,n.j,nu0,sigma2.0)
+	new.beta <- sample.beta(y,X,n.j,p,m,plt,new.theta,new.Sigma,new.sigma2)
+	
+
+	theta <- new.theta
+	Sigma <- new.Sigma
+	sigma2 <- new.sigma2
+	beta <- new.beta
+	
+	theta.MCMC[k,] <- theta
+	Sigma.MCMC[k,] <- c(Sigma[1,1],Sigma[1,2],Sigma[1,3],Sigma[2,2],Sigma[2,3], Sigma[3,3])
+	sigma2.MCMC[k] <- sigma2
+	beta.MCMC[,,k] <- beta
+	pred.beta[k,] <- mvrnorm(1,theta,Sigma)
+	
+}
+
+```
+
+Diagnostics
+```{r Diagnostics}
+## Effective sample size
+effectiveSize(sigma2.MCMC)
+
+effectiveSize(theta.MCMC[,1])
+effectiveSize(theta.MCMC[,2])
+effectiveSize(theta.MCMC[,3])
+
+effectiveSize(Sigma.MCMC[,1])
+effectiveSize(Sigma.MCMC[,2])
+effectiveSize(Sigma.MCMC[,3])
+effectiveSize(Sigma.MCMC[,4])
+effectiveSize(Sigma.MCMC[,5])
+effectiveSize(Sigma.MCMC[,6])
+### Effective sample size all above 1000
+
+
+## Trace plots
+
+### beta
+par(mfrow=c(3,3))
+for(j in 1:3){
+	plot(beta.MCMC[j,1,],ylab=paste("Beta_1,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_1 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,2,],ylab=paste("Beta_2,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_2 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,3,],ylab=paste("Beta_3,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_23 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+}
+par(mfrow=c(3,3))
+for(j in 4:6){
+	plot(beta.MCMC[j,1,],ylab=paste("Beta_1,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_1 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,2,],ylab=paste("Beta_2,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_2 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,3,],ylab=paste("Beta_3,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_23 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+}
+par(mfrow=c(3,3))
+for(j in 7:9){
+	plot(beta.MCMC[j,1,],ylab=paste("Beta_1,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_1 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,2,],ylab=paste("Beta_2,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_2 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,3,],ylab=paste("Beta_3,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_23 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+}
+par(mfrow=c(1,3))
+for(j in 10){
+	plot(beta.MCMC[j,1,],ylab=paste("Beta_1,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_1 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,2,],ylab=paste("Beta_2,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_2 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+	plot(beta.MCMC[j,3,],ylab=paste("Beta_3,",j,sep=""),xlab="Iteration",
+	     main=paste("Trace plot for beta_23 \n Plot=",j,sep=""),type="l",lwd=1,lty=1)
+}
+
+### Sigma
+par(mfrow=c(2,3))
+plot(Sigma.MCMC[,1],ylab="Sigma_1,1",xlab="Iteration",main="Trace plot for Sigma_1,1",type="l",lwd=1,lty=1)
+plot(Sigma.MCMC[,2],ylab="Sigma_1,2",xlab="Iteration",main="Trace plot for Sigma_1,2",type="l",lwd=1,lty=1)
+plot(Sigma.MCMC[,3],ylab="Sigma_1,3",xlab="Iteration",main="Trace plot for Sigma_1,3",type="l",lwd=1,lty=1)
+plot(Sigma.MCMC[,4],ylab="Sigma_2,2",xlab="Iteration",main="Trace plot for Sigma_2,2",type="l",lwd=1,lty=1)
+plot(Sigma.MCMC[,5],ylab="Sigma_2,3",xlab="Iteration",main="Trace plot for Sigma_2,3",type="l",lwd=1,lty=1)
+plot(Sigma.MCMC[,6],ylab="Sigma_3,3",xlab="Iteration",main="Trace plot for Sigma_3,3",type="l",lwd=1,lty=1)
+
+### sigma2 and theta
+par(mfrow=c(2,2))
+plot(sigma2.MCMC,ylab="sigma^2",xlab="Iteration",main="Trace plot for sigma^2",type="l",lwd=1,lty=1)
+plot(theta.MCMC[,1],ylab="Theta_1",xlab="Iteration",main="Trace plot for Theta_1",type="l",lwd=1,lty=1)
+plot(theta.MCMC[,2],ylab="Theta_2",xlab="Iteration",main="Trace plot for Theta_2",type="l",lwd=1,lty=1)
+plot(theta.MCMC[,3],ylab="Theta_3",xlab="Iteration",main="Trace plot for Theta_3",type="l",lwd=1,lty=1)
+
+
+thinning <- 30
+```
+
+posterior expectations of beta for each group
+```{r}
+post.mean.beta <- matrix(0,m,3)
+for(j in 1:m){
+  post.mean.beta[j,1] <- mean(beta.MCMC[j,1,seq(1001,S,by=thinning)])
+  post.mean.beta[j,2] <- mean(beta.MCMC[j,2,seq(1001,S,by=thinning)])
+  post.mean.beta[j,3] <- mean(beta.MCMC[j,3,seq(1001,S,by=thinning)])
+  
+}
+post.mean.beta
+```
+
+plot the resulting regression lines
+```{r}
+plot(seq(0,10,length=100),
+     post.mean.beta[1,1]+post.mean.beta[1,2]*seq(0,10,length=100)+post.mean.beta[1,3]*seq(0,10,length=100)^2,
+     xlab="Density",ylab="Yield",
+     col="grey",type="l")
+
+for(j in 2:m){
+ lines(seq(0,10,length=100),lwd=2,col="grey",
+       post.mean.beta[j,1]+post.mean.beta[j,2]*seq(0,10,length=100)+post.mean.beta[j,3]*seq(0,10,length=100)^2)
+}
+lines(seq(0,10,length=100),col="black",lwd=3,
+      mean(post.mean.beta[,1])+mean(post.mean.beta[,2])*seq(0,10,length=100)
+      + mean(post.mean.beta[,3])*seq(0,10,length=100)^2)
+
+```
+Compare to the regression lines in a):\
+The 10 lines are now more concentrated instead of being diffuse as in part a, indicating that after combining the information across different groups (plots in this scenario), the posterior inference became less affected by individual variability.
+
+
+### 11.2.d
+
+Plot marginal posterior and prior densities of theta and Sigma
+```{r}
+## theta
+
+### prior
+theta.prior <- mvrnorm(10000,mu_hat,S_hat)
+
+### plot
+par(mfrow=c(1,3))
+plot(density(theta.MCMC[seq(1,S,by=thinning),1]),xlab="Theta_1",ylab="Density",
+     main="Marginal posterior density \n for Theta_1",col="black",lwd=2)
+lines(density(theta.prior[seq(1,10000,by=thinning),1]),col="blue",lwd=2)
+
+plot(density(theta.MCMC[seq(1,S,by=thinning),2]),xlab="Theta_2",ylab="Density",
+     main="Marginal posterior density \n for Theta_2",col="black",lwd=2)
+lines(density(theta.prior[seq(1,10000,by=thinning),2]),col="blue",lwd=2)
+
+plot(density(theta.MCMC[seq(1,S,by=thinning),3]),xlab="Theta_3",ylab="Density",
+     main="Marginal posterior density \n for Theta_3",col="black",lwd=2)
+lines(density(theta.prior[seq(1,10000,by=thinning),3]),col="blue",lwd=2)
+
+
+## Sigma
+
+### prior
+Sigma.prior <- matrix(0,10000,6)
+set.seed(0)
+for(k in 1:10000){
+	Sigma <- solve(rwish(eta0,solve(S_hat)))
+	Sigma.prior[k,] <- c(Sigma[1,1],Sigma[1,2],Sigma[1,3],Sigma[2,2],Sigma[2,3], Sigma[3,3])
+}
+
+### plot
+par(mfrow=c(2,3))
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),1]),xlab="Sigma_1,1",ylab="Density",
+     main="Marginal posterior density \n for Sigma_1,1",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),1]),col="blue",lwd=2)
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),2]),xlab="Sigma_1,2",ylab="Density",
+     main="Marginal posterior density \n for Sigma_1,2",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),2]),col="blue",lwd=2)
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),3]),xlab="Sigma_1,3",ylab="Density",
+     main="Marginal posterior density \n for Sigma_1,3",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),3]),col="blue",lwd=2)
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),4]),xlab="Sigma_2,2",ylab="Density",
+     main="Marginal posterior density \n for Sigma_2,2,",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),4]),col="blue",lwd=2)
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),5]),xlab="Sigma_2,3",ylab="Density",
+     main="Marginal posterior density \n for Sigma_2,3",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),5]),col="blue",lwd=2)
+plot(density(Sigma.MCMC[seq(1,S,by=thinning),6]),xlab="Sigma_3,3",ylab="Density",
+     main="Marginal posterior density \n for Sigma_3,3",col="black",lwd=2)
+lines(density(Sigma.prior[seq(1,10000,by=thinning),6]),col="blue",lwd=2)
+```
+Slopes and intercepts in this model are noted by beta. The between group variability of beta is indicated by the stage 2 model, which is a multivariate normal distribution with parameter theta and Sigma. From the figures we see that most values of posterior theta and Sigma are non-zero, so there exists between-group variance.
+
+
+### 11.2.e
+
+identify the planting density that maximizes average yield over a random sample of plots
+```{r}
+post.beta <- apply(pred.beta, 2, mean)
+
+## post model: y=beta_1+beta_2*x+beta_3*x^2
+
+f = function(x) {
+  post.beta[1] + post.beta[2]*x + post.beta[3]*x^2
+}
+ans <- optimize(f, interval = c(0,10), maximum = T)
+x_max <- ans$maximum
+x_max
+
+plot(seq(0,10,length=100),
+     post.beta[1] + post.beta[2]*seq(0,10,length=100) + post.beta[3]*seq(0,10,length=100)^2,
+     xlab="Density",ylab="Yield",
+     col="black",type="l")
+```
+95% posterior predictive interval for the yield of a randomly sampled plot 
+
+```{r, warning=FALSE}
+Xtilde <- c(1, x_max, x_max^2)
+pred.y <- numeric()
+
+beta <- pred.beta[seq(1001,S,by=thinning),]
+beta.length <- dim(beta)[1]
+for (i in 1:beta.length) {
+  pred.y[i] <- t(beta[i,]) %*% Xtilde
+}
+
+## 95% posterior predictive interval for the yield
+data.frame(quantile(pred.y,0.025),quantile(pred.y,0.975))
+```
+
+
+
+## Q 6.3.d
+
+data
+```{r}
+divorce <- read.table("~/Documents/NYU/bayesian/hw/hw6/divorce.dat", quote="\"", comment.char="")
+names(divorce) <- c("age_dif", "divorce")
+X <- divorce[,1]
+y <- divorce[,2] + 1
+
+ranks<-match(y,sort(unique(y))) 
+uranks<-sort(unique(ranks))
+K<-length(uranks)
+
+n <- length(X) 
+p <- 1
+XX <- t(X)%*%X 
+```
+
+Apply ordinal probit regression.
+ 
+setup
+```{r}
+beta.0<-rep(0,p) # prior mean of beta
+Sigma.0<-n*solve(XX) # prior covariance matrix of beta
+iSigma.0<-solve(Sigma.0)
+mu.0<-rep(0,K-1) # prior mean of g
+gamma.0<-rep(10,K-1) #prior SD of g
+
+beta<-rep(0,p) #initial values
+z<-qnorm(rank(y,ties.method="random")/(n+1)) #initial values
+
+g<-rep(NA,length(uranks)-1)
+```
+
+MCMC
+```{r}
+S<-20000
+beta.MCMC<-matrix(NA,S,p) 
+z.MCMC<-matrix(NA,S,n) 
+g.MCMC<-matrix(NA,S,length(uranks)-1)
+
+ac<-0
+
+set.seed(0)
+for(s in 1:S) {
+
+  #update g 
+  for(k in 1:(K-1)) {
+    a<-max(z[y==k])
+    b<-min(z[y==(k+1)])
+    g[k]<- rtnorm(1,mu.0[k],gamma.0[k],a,b)
+  }
+
+  #update beta
+  Sigma.n<-solve(XX+iSigma.0) # posterior covariance matrix of beta
+  beta.n<-Sigma.n%*%(t(X)%*%z+iSigma.0%*%beta.0)# posterior mean of beta
+  beta<-mvrnorm(1,beta.n,Sigma.n)
+  
+  #update z
+  ez<-X*beta 
+  a<-c(-Inf,g)[ match( y-1, 0:K) ]
+  b<-c(g,Inf)[y]  
+  z<-rtnorm(n, ez, 1, a, b) 
+  
+  c<-rnorm(1,0,n^(-1/3))  
+  zp<-z+c 
+  gp<-g+c
+  lhr<-  sum(dnorm(zp,ez,1,log=T) - dnorm(z,ez,1,log=T) ) + 
+    sum(dnorm(gp,mu.0,gamma.0,log=T) - dnorm(g,mu.0,gamma.0,log=T) )
+  if(log(runif(1))<lhr) { 
+    z<-zp 
+    g<-gp 
+    ac<-ac+1 
+    }
+  
+  beta.MCMC[s,]<-beta
+  z.MCMC[s,]<-z
+  g.MCMC[s,]<-g
+
+} 
+
+```
+
+Diagnostics
+```{r}
+## traceplot
+par(mfrow=c(1,1))
+plot(beta.MCMC[1:2000],ylab=paste("beta_",j,sep=""),xlab="Iteration",
+       main="Trace plot for beta",type="l",lwd=1,lty=1)
+
+
+
+#ACF plot
+burnin<-1000
+acf(beta.MCMC[(burnin+1):S],main="ACF for beta",lag.max=100)
+
+thin<-25
+acf(beta.MCMC[seq(burnin+1,S,by=thin)],main="ACF for beta",lag.max=100)
+
+length(beta.MCMC[seq(burnin+1,S,by=thin)])
+print(effectiveSize(beta.MCMC[seq(burnin+1,S,by=thin)]))
+```
+
+Posterior inference
+```{r}
+post.beta <- c(mean(beta.MCMC[seq(burnin+1,S,by=thin)]),
+               sd(beta.MCMC[seq(burnin+1,S,by=thin)]), 
+               quantile(beta.MCMC[seq(burnin+1,S,by=thin)], 0.025),
+               quantile(beta.MCMC[seq(burnin+1,S,by=thin)], 0.975))
+
+post.g <- c(mean(g.MCMC[seq(burnin+1,S,by=thin)]),
+               sd(g.MCMC[seq(burnin+1,S,by=thin)]), 
+               quantile(g.MCMC[seq(burnin+1,S,by=thin)], 0.025),
+               quantile(g.MCMC[seq(burnin+1,S,by=thin)], 0.975))
+post <- rbind(post.beta, post.g)
+
+colnames(post)[c(1,2)] <- c("mean", "sd")
+
+post
+```
+
+
+Probability of beta > 0 given the data
+```{r}
+sum(beta.MCMC[seq(burnin+1,S,by=thin)] >0) / length(beta.MCMC[seq(burnin+1,S,by=thin)])
+```
+

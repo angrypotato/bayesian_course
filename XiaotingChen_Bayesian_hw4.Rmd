@@ -1,0 +1,718 @@
+---
+title: "HW4"
+author: "Xiaoting Chen"
+date: "2022-11-10"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MASS)
+library(coda)
+
+### functions to sample from full conditionals
+sample.beta <- function(y,sigma2,Xprime.X,Xprime.y,iSigma0,iSigma0beta0){
+	
+	post.var <- solve(iSigma0+(Xprime.X/sigma2))
+	post.mean <- post.var%*%(iSigma0beta0+(Xprime.y/sigma2))
+	new.beta <- mvrnorm(1,post.mean,post.var)
+	return(new.beta)
+}
+
+sample.sigma2 <- function(y,X,beta,nu.n,nu0,sigma2.0,p,n){
+	
+	ss.residuals <- t(y-X%*%matrix(beta,nrow=p,ncol=1))%*%(y-X%*%matrix(beta,nrow=p,ncol=1))
+	sigma2.n <- 1/(nu.n)*((nu0*sigma2.0)+ss.residuals)
+	new.sigma2 <- 1/rgamma(1,nu.n/2,(nu.n*sigma2.n)/2)
+	return(new.sigma2)
+}
+
+```
+
+## 9.1
+
+Read in data
+```{r, warning=FALSE}
+swim <- data.frame(t(read.table("swim.dat", quote="\"")))
+swim = cbind(data.frame(week = seq(1, 11, by = 2)),
+             swim)
+names(swim) = c("week", "y1", "y2", "y3", "y4")
+swim
+```
+
+### 9.1.a.i
+
+Fit 4 separate models for the four swimmers using semi-conjugate prior p(beta, sigma^2)=N(beta; beta0,Sigma0)*InverseGamma(nu0/2,nu0*(sigma02)/2).\
+
+Since we have the same knowledge of these four swimmers, we can use the same prior setting for the 4 models.\
+
+According to our prior knowledge of the swimming time ("competitive times for this age group generally range from 22 to 24 seconds") and assuming that "week" does not affect swimming time significantly, we can take 23 as the prior beta0 for intercept and 0 as the prior beta0 for predictor "week". Thus we have `beta0 = c(23,0)`.\
+
+To set up the prior covariance matrix Sigma0, we assume there is no covariance with the beta coefficients thus the off-diagnal elements are 0. To be 95% confident that the swimming time falls into the [22, 24] range, we have the standard deviation for 23 is 0.5, thus Sigma0[1,1] = `r 0.5^2`. In this case Sigma0[2,2] indicates the variance of the effect of week on swimming time, so we let Sigma0[2,2] = 0.1 assuming the training time has mild effect on swiming performance.\
+
+```{r}
+## Setting up the matrices
+n <- 6
+p <- 2   # intercept and week
+X <- matrix(cbind(rep(1,n),swim[['week']]),nrow=n,ncol=p)
+
+## prior parameters for beta
+beta0 <- c(23,0)
+Sigma0 <- matrix(0,nrow=2,ncol=2)
+Sigma0[1,1] <- 0.5^2
+Sigma0[2,2] <- 0.1
+Sigma0[1,2] <- 0
+Sigma0[2,1] <- 0
+
+## prior precision matrix
+iSigma0 <- solve(Sigma0)
+## prior precision times prior mean
+iSigma0beta0 <- iSigma0%*%matrix(beta0,nrow=2,ncol=1)
+
+## prior parameters for sigma2   ???
+nu0 <- 1
+sigma2.0 <- 0.25
+
+nu.n <- nu0+n
+
+```
+
+Function to run Gibbs sampling for each of the four swimmers.
+```{r}
+gibbs <- function(y) {
+  
+  Xprime.X <- t(X)%*%X
+  Xprime.y <- t(X)%*%y
+  
+  ## Running the Gibbs sampling algorithm
+  
+  S <- 10000
+  
+  output.MCMC <- matrix(0,S,p+1)
+  
+  ## Initial values
+  init.beta <- c(mean(y),0)
+  init.sigma2 <- var(y)
+  
+  set.seed(0)
+  for(i in 1:S){
+  	
+  	if(i==1){
+  		output.MCMC[i,1] <- init.sigma2
+  		output.MCMC[i,2:(p+1)] <- init.beta
+  	}
+  	if(i>1){
+  		output.MCMC[i,1] <- sample.sigma2(y,X,output.MCMC[(i-1),(2:(p+1))],nu.n,nu0,sigma2.0,p,n)
+  		output.MCMC[i,2:(p+1)] <- sample.beta(y,output.MCMC[i,1],Xprime.X,Xprime.y,iSigma0,iSigma0beta0)
+  	}
+  }
+  return(output.MCMC)
+}
+
+
+```
+
+Model for swimmer1.
+```{r}
+set.seed(1)
+output.MCMC.1 <- gibbs(swim[,2])
+### Examining trace plots, autocorrelation functions and effective sample size
+par(mfrow=c(1,2))
+plot(output.MCMC.1[,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.1[,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### take a closer look, check the first 1000 samples and see if there's an increasing or decreasing trend
+par(mfrow=c(1,2))
+plot(output.MCMC.1[1:1000,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.1[1:1000,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### beta
+par(mfrow=c(1,1))
+plot(output.MCMC.1[,1],xlab="Iteration number",ylab="Sigma2",type="l",col="black")
+
+par(mfrow=c(1,2))
+acf(output.MCMC.1[,2],main="Beta_1")
+acf(output.MCMC.1[,3],main="Beta_2")
+
+
+### sigma^2
+par(mfrow=c(1,1))
+acf(output.MCMC.1[,1],main="Sigma2")
+
+```
+The chain seems converged quickly, drop the first 1000 samples as a conservative choice.
+The first 4 laps have significant non-zero, considering thinning.\
+
+
+Model for swimmer2.
+```{r}
+set.seed(1)
+output.MCMC.2 <- gibbs(swim[,3])
+### Examining trace plots, autocorrelation functions and effective sample size
+par(mfrow=c(1,2))
+plot(output.MCMC.2[,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.2[,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### take a closer look, check the first 1000 samples and see if there's an increasing or decreasing trend
+par(mfrow=c(1,2))
+plot(output.MCMC.2[1:1000,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.2[1:1000,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### beta
+par(mfrow=c(1,1))
+plot(output.MCMC.2[,1],xlab="Iteration number",ylab="Sigma2",type="l",col="black")
+
+par(mfrow=c(1,2))
+acf(output.MCMC.2[,2],main="Beta_1")
+acf(output.MCMC.2[,3],main="Beta_2")
+
+
+### sigma^2
+par(mfrow=c(1,1))
+acf(output.MCMC.2[,1],main="Sigma2")
+
+```
+The chain seems converged quickly, drop the first 1000 samples as a conservative choice.
+The first 4 laps have significant non-zero, considering thinning.\
+
+
+Model for swimmer3.
+```{r}
+set.seed(1)
+output.MCMC.3 <- gibbs(swim[,4])
+### Examining trace plots, autocorrelation functions and effective sample size
+par(mfrow=c(1,2))
+plot(output.MCMC.3[,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.3[,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### take a closer look, check the first 1000 samples and see if there's an increasing or decreasing trend
+par(mfrow=c(1,2))
+plot(output.MCMC.3[1:1000,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.3[1:1000,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### beta
+par(mfrow=c(1,1))
+plot(output.MCMC.3[,1],xlab="Iteration number",ylab="Sigma2",type="l",col="black")
+
+par(mfrow=c(1,2))
+acf(output.MCMC.3[,2],main="Beta_1")
+acf(output.MCMC.3[,3],main="Beta_2")
+
+
+### sigma^2
+par(mfrow=c(1,1))
+acf(output.MCMC.3[,1],main="Sigma2")
+
+```
+The chain seems converged quickly, drop the first 1000 samples as a conservative choice.
+The first 4 laps have significant non-zero, considering thinning.\
+
+
+Model for swimmer4.
+```{r}
+set.seed(1)
+output.MCMC.4 <- gibbs(swim[,5])
+### Examining trace plots, autocorrelation functions and effective sample size
+par(mfrow=c(1,2))
+plot(output.MCMC.4[,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.4[,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### take a closer look, check the first 1000 samples and see if there's an increasing or decreasing trend
+par(mfrow=c(1,2))
+plot(output.MCMC.4[1:1000,2],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC.4[1:1000,3],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+### beta
+par(mfrow=c(1,1))
+plot(output.MCMC.4[,1],xlab="Iteration number",ylab="Sigma2",type="l",col="black")
+
+par(mfrow=c(1,2))
+acf(output.MCMC.4[,2],main="Beta_1")
+acf(output.MCMC.4[,3],main="Beta_2")
+
+
+### sigma^2
+par(mfrow=c(1,1))
+acf(output.MCMC.4[,1],main="Sigma2")
+
+```
+The chain seems converged quickly, drop the first 1000 samples as a conservative choice.
+The first 5 laps have significant non-zero, considering thinning.
+
+
+### 9.1.a.ii
+
+```{r}
+S <- 10000
+Xtilde <- matrix(c(1,13),nrow=1,ncol=p,byrow=T)
+pred.MCMC.1 = pred.MCMC.2 = pred.MCMC.3 = pred.MCMC.4 = matrix(0,S,1)
+```
+
+Posterior inference for swimmer1.
+```{r}
+for(i in 1:S){
+		pred.MCMC.1[i,1] <- mvrnorm(1,Xtilde%*%output.MCMC.1[i,2:(p+1)],output.MCMC.1[i,1]*diag(1,1))
+}
+
+burnin <- 1000 
+thinning <- 4
+
+output1 <- data.frame(pred.MCMC.1[c((burnin+1):S), 1])
+output1 <- output1[seq.int(1, dim(output1)[1], thinning),]
+
+## posterior predictive distribution
+plot(density(output1),col="black",main="Beta_1")
+abline(v=mean(output1),col="red",lwd=2,lty=1)
+abline(v=median(output1),col="blue",lwd=2,lty=1)
+abline(v=beta0[1],col="grey",lwd=2,lty=1)
+abline(v=quantile(output1,0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output1,0.975),lty=3,lwd=2,col="red")
+
+swimmer1 <- data.frame(mean_pred = mean(output1),
+                       median_pred = median(output1))
+swimmer1
+```
+
+
+Posterior inference for swimmer2.
+```{r}
+for(i in 1:S){
+		pred.MCMC.2[i,1] <- mvrnorm(1,Xtilde%*%output.MCMC.2[i,2:(p+1)],output.MCMC.2[i,1]*diag(1,1))
+}
+
+burnin <- 1000 
+thinning <- 4
+
+output2 <- data.frame(pred.MCMC.2[c((burnin+1):S), 1])
+output2 <- output2[seq.int(1, dim(output2)[1], thinning),]
+
+## posterior predictive distribution
+plot(density(output2),col="black",main="Beta_1")
+abline(v=mean(output2),col="red",lwd=2,lty=1)
+abline(v=median(output2),col="blue",lwd=2,lty=1)
+abline(v=beta0[1],col="grey",lwd=2,lty=1)
+abline(v=quantile(output2,0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output2,0.975),lty=3,lwd=2,col="red")
+
+swimmer2 <- data.frame(mean_pred = mean(output2),
+                       median_pred = median(output2))
+swimmer2
+```
+
+
+Posterior inference for swimmer3.
+```{r}
+for(i in 1:S){
+		pred.MCMC.3[i,1] <- mvrnorm(1,Xtilde%*%output.MCMC.3[i,2:(p+1)],output.MCMC.3[i,1]*diag(1,1))
+}
+
+burnin <- 1000 
+thinning <- 4
+
+output3 <- data.frame(pred.MCMC.3[c((burnin+1):S), 1])
+output3 <- output3[seq.int(1, dim(output3)[1], thinning),]
+
+## posterior predictive distribution
+plot(density(output3),col="black",main="Beta_1")
+abline(v=mean(output3),col="red",lwd=2,lty=1)
+abline(v=median(output3),col="blue",lwd=2,lty=1)
+abline(v=beta0[1],col="grey",lwd=2,lty=1)
+abline(v=quantile(output3,0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output3,0.975),lty=3,lwd=2,col="red")
+
+swimmer3 <- data.frame(mean_pred = mean(output3),
+                       median_pred = median(output3))
+swimmer3
+```
+
+Posterior inference for swimmer4.
+```{r}
+for(i in 1:S){
+		pred.MCMC.4[i,1] <- mvrnorm(1,Xtilde%*%output.MCMC.4[i,2:(p+1)],output.MCMC.4[i,1]*diag(1,1))
+}
+
+burnin <- 1000 
+thinning <- 5
+
+output4 <- data.frame(pred.MCMC.4[c((burnin+1):S), 1])
+output4 <- output4[seq.int(1, dim(output4)[1], thinning),1]
+
+## posterior predictive distribution
+plot(density(output4),col="black",main="Beta_1")
+abline(v=mean(output4),col="red",lwd=2,lty=1)
+abline(v=median(output4),col="blue",lwd=2,lty=1)
+abline(v=beta0[1],col="grey",lwd=2,lty=1)
+abline(v=quantile(output4,0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output4,0.975),lty=3,lwd=2,col="red")
+
+swimmer4 <- data.frame(mean_pred = mean(output4),
+                       median_pred = median(output4))
+swimmer4
+```
+
+
+### 9.1.b
+
+```{r}
+post.pred <- data.frame(cbind(output1, output2,output3,output4))
+max.1 = max.2 = max.3 = max.4 = NULL
+n.sample = length(post.pred)
+
+for (i in 1:n.sample) {
+  max.1[i] <- (which.max(post.pred[i,]) == 1)
+  max.2[i] <- (which.max(post.pred[i,]) == 2)
+  max.3[i] <- (which.max(post.pred[i,]) == 3)
+  max.4[i] <- (which.max(post.pred[i,]) == 4)
+  
+  prob <- data.frame(prob.1 = sum(max.1)/n.sample,
+                     prob.2 = sum(max.2)/n.sample,
+                     prob.3 = sum(max.3)/n.sample,
+                     prob.4 = sum(max.4)/n.sample)
+
+}
+prob
+```
+Considering this is a swimming competition, calculate the min might be more reasonable.
+```{r}
+post.pred <- data.frame(cbind(output1, output2,output3,output4))
+min.1 = min.2 = min.3 = min.4 = NULL
+n.sample = length(post.pred)
+
+for (i in 1:n.sample) {
+  min.1[i] <- (which.min(post.pred[i,]) == 1)
+  min.2[i] <- (which.min(post.pred[i,]) == 2)
+  min.3[i] <- (which.min(post.pred[i,]) == 3)
+  min.4[i] <- (which.min(post.pred[i,]) == 4)
+  
+  prob <- data.frame(prob.1 = sum(min.1)/n.sample,
+                     prob.2 = sum(min.2)/n.sample,
+                     prob.3 = sum(min.3)/n.sample,
+                     prob.4 = sum(min.4)/n.sample)
+
+}
+prob
+```
+
+According to the posterior predictive distributions of the four swimmers, the estimated probability of swimmer1 using the shortest time among the four swimmers for the competition in two weeks is one, thus the coach should send swimmer1 to the competition.
+
+
+## 9.2
+
+Read in data.
+```{r}
+glu <- read.csv("~/Documents/NYU/bayesian/hw/hw4/azdiabetes.dat", sep="")
+glu$intercept <- 1  
+head(glu)
+```
+### 9.2.a
+
+```{r}
+## data
+y <- glu$glu
+X <- as.matrix(glu[,c(1,3:7,9)])
+
+## prior parameters
+g <- length(y)
+nu0 <- 2
+sigma2.0 <- 1
+
+## parameters for mc sampling
+S <- 10000
+n <- dim(X)[1]
+p <- dim(X)[2]
+
+Hg <- (g / (g + 1)) * X %*% solve(t(X) %*% X) %*% t(X)
+SSRg <- t(y) %*% (diag(1, nrow = n) - Hg) %*% y
+
+
+## monte-carlo sampling
+sigma2 <- 1/rgamma(S, (nu0+n)/2, (nu0 * sigma2.0+SSRg)/2)
+Vb <- g * solve(t(X) %*% X) / (g + 1)
+Eb <- Vb %*% t(X) %*% y
+E <- matrix(rnorm(S * p, 0, sqrt(sigma2)), S, p)
+beta <- t(t(E %*% chol(Vb)) + c(Eb))
+
+
+## posterior confidence interval
+
+### intercept
+plot(density(beta[,7]),col="black",main="intercept")
+abline(v=median(beta[,7]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,7],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,7],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,7],c(0.025,0.975))
+
+### number of pregnancies
+plot(density(beta[,1]),col="black",main="number of pregnancies")
+abline(v=median(beta[,1]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,1],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,1],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,1],c(0.025,0.975))
+
+### blood pressure
+plot(density(beta[,2]),col="black",main="blood pressure")
+abline(v=median(beta[,2]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,2],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,2],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,2],c(0.025,0.975))
+
+### skin fold thickness
+plot(density(beta[,3]),col="black",main="skin fold thickness")
+abline(v=median(beta[,3]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,3],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,3],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,3],c(0.025,0.975))
+
+### body mass index
+plot(density(beta[,4]),col="black",main="body mass index")
+abline(v=median(beta[,4]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,4],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,4],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,4],c(0.025,0.975))
+
+### diabetes pedigree
+plot(density(beta[,5]),col="black",main="diabetes pedigree")
+abline(v=median(beta[,5]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,5],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,5],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,5],c(0.025,0.975))
+
+
+### age
+plot(density(beta[,6]),col="black",main="age")
+abline(v=median(beta[,6]),col="blue",lwd=2,lty=1)
+abline(v=quantile(beta[,6],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(beta[,6],0.975),lty=3,lwd=2,col="red")
+quantile(beta[,6],c(0.025,0.975))
+
+```
+
+### 9.2.b
+
+```{r}
+##### function to compute the marginal probability
+
+lpy.X <- function(y, X, g=length(y), nu0=1, s20=try(summary(lm(y~ -1 + X))$sigma^2, silent = T)) {
+  n <- dim(X)[1]
+  p <- dim(X)[2]
+  
+  if (p == 0) {
+    Hg <- 0
+    s20 <- mean(y^2)
+  }
+  
+  if (p > 0) {
+    Hg <- (g/(g+1)) * X %*% solve(t(X)%*%X)%*%t(X)
+  }
+  
+  SSRg <- t(y)%*%(diag(1,nrow=n)-Hg) %*% y -
+    0.5 *(n*log(pi)+p*log(1+g)+(nu0+n) *log(nu0*s20+SSRg)-nu0*log(nu0*s20))+
+    lgamma((nu0+n)/2) -lgamma(nu0/2)
+  
+}
+
+
+```
+
+
+```{r}
+library("BMA")
+bicreg(x = X, y = y)
+```
+
+
+
+
+## 9.3
+
+### 9.3.a
+
+Read in data.
+```{r}
+crime <- read.csv("crime.dat", sep="")
+head(crime)
+```
+
+Bayesian regression with g-prior
+```{r}
+## data
+y <- crime$y
+X <- as.matrix(crime[,-1])
+
+## prior parameters
+g <- length(y)
+nu0 <- 2
+sigma2.0 <- 1
+
+## parameters for mc sampling
+S <- 10000
+n <- dim(X)[1]
+p <- dim(X)[2]
+
+Hg <- (g / (g + 1)) * X %*% solve(t(X) %*% X) %*% t(X)
+SSRg <- t(y) %*% (diag(1, nrow = n) - Hg) %*% y
+
+
+## monte-carlo sampling
+set.seed(1)
+sigma2 <- 1/rgamma(S, (nu0+n)/2, (nu0 * sigma2.0+SSRg)/2)
+Vb <- g * solve(t(X) %*% X) / (g + 1)
+Eb <- Vb %*% t(X) %*% y
+E <- matrix(rnorm(S * p, 0, sqrt(sigma2)), S, p)
+beta <- t(t(E %*% chol(Vb)) + c(Eb))
+
+
+## posterior mean and confidence interval
+
+crime.beta <- data.frame(beta = names(crime)[-1],
+                         posterior_mean = rep(0,15),
+                         CI_0.025 = rep(0,15),
+                         CI_0.975 = rep(0,15))
+
+for (i in 1:15) {
+  crime.beta[i,'posterior_mean'] <- mean(beta[,i])
+  crime.beta[i,'CI_0.025'] <- quantile(beta[,i],0.025)
+  crime.beta[i,'CI_0.975'] <- quantile(beta[,i],0.975)
+}
+
+crime.beta
+```
+
+Least squares estimates
+```{r}
+Xprime.X <- t(X)%*%X
+Xprime.y <- t(X)%*%matrix(y,nrow=n,ncol=1)
+
+beta.ols <- solve(Xprime.X)%*%Xprime.y
+sigma2.ols <- (1/(n-p))*t(y-X%*%beta.ols)%*%(y-X%*%beta.ols)
+beta.ols  
+```
+
+The estimated betas of OLS and Bayesian regression are quite close. Predictors whose 95% confidence intervals of beta do not cover 0 can be seemed as strongly predictive of the crime rates, thus from the results we can conclude that `M` (percentage of males aged 14-24), `Ed` (mean years of schooling), `U2` (unemployment rate of urban males 35-39), `Ineq` (Income inequality), and `Prob` (probability of imprisonment) are significant predictors.
+
+
+### 9.3.b
+
+```{r}
+set.seed(1)
+sample <- sample(c(TRUE, FALSE), nrow(crime), replace=TRUE, prob=c(0.5,0.5))
+y_tr  <- crime[sample, ]$y
+x_tr <- as.matrix(crime[sample, -1])
+y_te   <- crime[!sample, ]$y
+x_te <- as.matrix(crime[!sample, -1])
+```
+
+#### i.
+```{r}
+Xprime.X <- t(x_tr)%*%x_tr
+Xprime.y <- t(x_tr)%*%matrix(y_tr,nrow=length(y_tr),ncol=1)
+
+beta.ols <- solve(Xprime.X)%*%Xprime.y
+beta.ols 
+
+## prediction
+Xtilde <- x_te
+pred_yte_ols <- Xtilde%*%beta.ols
+
+plot(x = y_te, y = pred_yte_ols)
+abline(a = 0, b = 1)
+
+err_ols <- (1/length(y_te)) * sum((pred_yte_ols - y_te)^2)
+err_ols
+```
+
+#### ii.
+```{r}
+## get posterior distribution given training data
+S <- 10000
+n <- dim(x_tr)[1]
+p <- dim(x_tr)[2]
+
+Hg <- (g / (g + 1)) * x_tr %*% solve(t(x_tr) %*% x_tr) %*% t(x_tr)
+SSRg <- t(y_tr) %*% (diag(1, nrow = n) - Hg) %*% y_tr
+
+set.seed(1)
+sigma2 <- 1/rgamma(S, (nu0+n)/2, (nu0 * sigma2.0+SSRg)/2)
+Vb <- g * solve(t(x_tr) %*% x_tr) / (g + 1)
+Eb <- Vb %*% t(x_tr) %*% y_tr
+E <- matrix(rnorm(S * p, 0, sqrt(sigma2)), S, p)
+beta <- t(t(E %*% chol(Vb)) + c(Eb))
+
+
+## posterior mean and confidence interval
+crime.beta <- data.frame(beta = names(crime)[-1],
+                         posterior_mean = rep(0,15),
+                         CI_0.025 = rep(0,15),
+                         CI_0.975 = rep(0,15))
+
+for (i in 1:15) {
+  crime.beta[i,'posterior_mean'] <- mean(beta[,i])
+  crime.beta[i,'CI_0.025'] <- quantile(beta[,i],0.025)
+  crime.beta[i,'CI_0.975'] <- quantile(beta[,i],0.975)
+}
+crime.beta
+
+
+## prediction 
+Xtilde <- x_te
+pred_yte_bayes <- Xtilde%*%as.matrix(crime.beta[,'posterior_mean'])
+
+plot(x = y_te, y = pred_yte_bayes)
+abline(a = 0, b = 1)
+
+err_bayes <- (1/length(y_te)) * sum((pred_yte_bayes - y_te)^2)
+err_bayes
+```
+
+There is no significant difference in prediction error between the results of OLS and Bayesian regression models.
+
+
+### 9.3.c
+```{r}
+prediction_error <- data.frame(OLS = rep(NA,100),
+                               bayes = rep(NA,100))
+S <- 10000
+
+set.seed(0)
+
+for (i in 1:100) {
+  
+  ## split data
+  sample <- sample(c(TRUE, FALSE), nrow(crime), replace=T, prob=c(0.5,0.5))
+  y_tr  <- crime[sample, ]$y
+  x_tr <- as.matrix(crime[sample, -1])
+  y_te   <- crime[!sample, ]$y
+  x_te <- as.matrix(crime[!sample, -1])
+  
+  ## ols
+  Xprime.X <- t(x_tr)%*%x_tr
+  Xprime.y <- t(x_tr)%*%matrix(y_tr,nrow=length(y_tr),ncol=1)
+  beta.ols <- solve(Xprime.X, tol = 1e-20)%*%Xprime.y
+  Xtilde <- x_te
+  pred_yte_ols <- Xtilde%*%beta.ols
+  prediction_error[i, "OLS"] <- (1/length(y_te)) * sum((pred_yte_ols - y_te)^2)
+  
+  ## bayes
+  n <- dim(x_tr)[1]
+  p <- dim(x_tr)[2]
+  Hg <- (g / (g + 1)) * x_tr %*% solve(t(x_tr) %*% x_tr, tol = 1e-20) %*% t(x_tr)
+  SSRg <- t(y_tr) %*% (diag(1, nrow = n) - Hg) %*% y_tr
+
+  
+  sigma2 <- 1/rgamma(S, (nu0+n)/2, (nu0 * sigma2.0+SSRg)/2)
+  Vb <- g * solve(t(x_tr) %*% x_tr, tol = 1e-20) / (g + 1)
+  Eb <- Vb %*% t(x_tr) %*% y_tr
+  E <- matrix(rnorm(S * p, 0, sqrt(sigma2)), S, p)
+  beta <- t(t(E %*% chol(Vb, pivot = T)) + c(Eb))
+  pred_yte_bayes <- x_te%*%as.matrix(apply(beta,2,mean))
+  prediction_error[i, "bayes"] <- (1/length(y_te)) * sum((pred_yte_bayes - y_te)^2)
+
+}
+
+apply(na.omit(prediction_error), 2, mean)
+```
+
+Even though using a different random seed and repeatedly split the data in half randomly for 100 times, the average prediction errors of OLS and Bayesian regression model are still quite similar.

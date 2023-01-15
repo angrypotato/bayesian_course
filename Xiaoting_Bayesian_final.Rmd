@@ -1,0 +1,835 @@
+---
+title: "Bayesian Final"
+author: "Xiaoting Chen"
+date: "2022-12-18"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Required packages
+```{r message=FALSE}
+library(MASS)
+library(coda)
+library(MCMCpack)
+library(msm)
+library(ggplot2)
+```
+
+
+## 1.
+
+Data
+```{r}
+IBBENS <- read.csv("~/Documents/NYU/bayesian/final/IBBENS.csv")
+head(IBBENS)
+```
+
+### 1.a
+
+This is a two-level hierarchical normal model.\
+The first stage (`y_ij | theta_i,sigma2 ~ N(theta_i,sigma2)`) models the within-group variability, which is the variability within each subsidiary.\ 
+The second stage (`theta_i | mu, tau2 ~ N(mu, tau2)`) accounts for the between-group variability, which is the variability between the subsidiaries.\
+The rest are prior distributions of the parameters depending on hyperparameters.\
+
+
+The given model is based on the assumption that the variability in cholesterol intake in each subsidiary is that same, thus sigma2_j = sigma2. If we want to also account for the variabiliy in the chol changes from different subsidiaries, the model could be modified by using sigma2_j instead of sigma2 for each subsidiary. A possible choice is to model sigma2_j using inverse gamma distribution with hyperparameter nu_0 and sigma2_0:\
+`sigma2_1, ... , sigma2_m | nu_0, sigma2_0 ~ InverseGamma(nu_0/2, (nu_0*sigma2_0^2)/2)`
+
+
+### 1.b
+
+Extract information from the data
+```{r data}
+y <- IBBENS[,1]
+sub <- IBBENS[,2]
+
+## This is the vector with the number n_j of observations per subsidiary
+n.j <- as.numeric(table(sub))
+## Number of subsidiaries
+m <- length(n.j)
+
+### Sample averages and sample variance by subsidiary
+y.bar.sub <- rep(0,m)
+s2.sub <- rep(0,m)
+
+for(i in 1:m){
+	y.bar.sub[i] <- mean(y[which(sub==i)])
+    s2.sub[i] <- var(y[which(sub==i)])
+}
+
+## Average of the subsidiary-specific mean and variances
+mean.y.bar.sub <- mean(y.bar.sub)
+mean.s2.sub <- mean(s2.sub)
+var.y.bar.sub <- var(y.bar.sub)
+```
+
+Prior
+```{r prior}
+## sigma2
+nu.0 <- 2e-3
+sigma2.0 <- 2e-3/nu.0
+
+## tau2
+eta.0 <- 2e-3
+tau2.0 <- 2e-3/eta.0
+
+## mu
+mu.0 <- 0
+gamma2.0 <- 1e6
+```
+
+sampling functions required
+```{r}
+sample.theta.j <- function(n.j,sigma2,mu,ybar.j,tau2){
+	
+	post.var <- 1/((n.j/sigma2)+(1/tau2))
+	post.mean <- post.var*(((n.j/sigma2)*ybar.j)+(mu/tau2))
+	
+	new.theta.j <- rnorm(1,post.mean,sqrt(post.var))
+	return(new.theta.j)
+	
+}
+
+
+sample.sigma2 <- function(n.j,y,theta.j,nu.0,sigma2.0,m,n){
+	
+	theta.j.expanded <- NULL
+	for(i in 1:m){
+		theta.j.expanded <- c(theta.j.expanded,rep(theta.j[i],n.j[i]))	
+	}
+	
+	nu.n <- nu.0+sum(n.j)
+	sigma2.n <- (1/nu.n)*((nu.0*sigma2.0)+sum((y-theta.j.expanded)^2))
+	
+	new.sigma2 <- 1/rgamma(1,(nu.n/2),((nu.n*sigma2.n)/2))
+	return(new.sigma2)
+}
+
+
+sample.tau2 <- function(theta.j,m,mu,eta.0,tau2.0){
+	
+	eta.n <- m+eta.0
+	tau2.n <- (1/eta.n)*((eta.0*tau2.0)+sum((theta.j-mu)^2))
+	
+	new.tau2 <- 1/rgamma(1,(eta.n/2),((eta.n*tau2.n)/2))
+	return(new.tau2)
+}
+
+
+sample.mu <- function(theta.j,m,tau2,mu.0,gamma2.0){
+		
+	post.var <- 1/((m/tau2)+(1/gamma2.0))
+	theta.bar <- mean(theta.j)
+	post.mean <- post.var*(((m/tau2)*theta.bar)+(mu.0/gamma2.0))
+	
+	new.mu <- rnorm(1,post.mean,sqrt(post.var))
+	return(new.mu)
+}
+
+```
+
+Initial values
+```{r init_value}
+init.theta.j <- y.bar.sub
+init.mu <- mean.y.bar.sub
+init.sigma2 <- mean.s2.sub
+init.tau2 <- var.y.bar.sub
+```
+
+Run Gibbs
+```{r gibbs}
+S <- 100000
+
+## store samples
+theta.MCMC <- matrix(0,nrow=S,ncol=m)
+other.pars.MCMC <- matrix(0,S,ncol=3)
+new.theta.j <- rep(0,m)
+
+set.seed(0) #The random seed here is different from that for the slides of the lecture 8. Compare the results.
+for(k in 1:S){
+
+	if(k==1){
+		theta.j <- init.theta.j
+		mu <- init.mu
+		sigma2 <- init.sigma2
+		tau2 <- init.tau2
+	}
+	
+	new.mu <- sample.mu(theta.j,m,tau2,mu.0,gamma2.0)
+	new.tau2 <- sample.tau2(theta.j,m,new.mu,eta.0,tau2.0) 
+	new.sigma2 <- sample.sigma2(n.j,y,theta.j,nu.0,sigma2.0,m,n)
+		
+	for(l in 1:m){
+		new.theta.j[l] <- sample.theta.j(n.j[l],new.sigma2,new.mu,y.bar.sub[l],new.tau2)	
+	}
+	mu <- new.mu
+	tau2 <- new.tau2
+	sigma2 <- new.sigma2
+	theta.j <- new.theta.j
+	
+	theta.MCMC[k,] <- theta.j
+	other.pars.MCMC[k,] <- c(mu,sigma2,tau2)
+	
+}
+```
+
+MCMC diagnostics
+```{r diagnostics}
+## Effective sample size
+effectiveSize(other.pars.MCMC[,1])
+effectiveSize(other.pars.MCMC[,2])
+effectiveSize(other.pars.MCMC[,3])
+
+effectiveSize(theta.MCMC[,1])
+effectiveSize(theta.MCMC[,2])
+effectiveSize(theta.MCMC[,3])
+effectiveSize(theta.MCMC[,4])
+effectiveSize(theta.MCMC[,5])
+effectiveSize(theta.MCMC[,6])
+effectiveSize(theta.MCMC[,7])
+effectiveSize(theta.MCMC[,8])
+### all above 1000
+
+
+## Trace plots
+par(mfrow=c(2,2))
+plot(other.pars.MCMC[c(1:5000),1],xlab="Iteration number",ylab="mu",type="l")
+plot(other.pars.MCMC[c(1:5000),2],xlab="Iteration number",ylab="sigma2",type="l")
+plot(other.pars.MCMC[c(1:5000),3],xlab="Iteration number",ylab="tau2",type="l")
+
+par(mfrow=c(2,2))
+plot(theta.MCMC[c(1:5000),1],xlab="Iteration number",ylab="theta_1",type="l")
+plot(theta.MCMC[c(1:5000),2],xlab="Iteration number",ylab="theta_2",type="l")
+plot(theta.MCMC[c(1:5000),3],xlab="Iteration number",ylab="theta_3",type="l")
+plot(theta.MCMC[c(1:5000),4],xlab="Iteration number",ylab="theta_4",type="l")
+
+par(mfrow=c(2,2))
+plot(theta.MCMC[c(1:5000),5],xlab="Iteration number",ylab="theta_5",type="l")
+plot(theta.MCMC[c(1:5000),6],xlab="Iteration number",ylab="theta_6",type="l")
+plot(theta.MCMC[c(1:5000),7],xlab="Iteration number",ylab="theta_7",type="l")
+plot(theta.MCMC[c(1:5000),8],xlab="Iteration number",ylab="theta_8",type="l")
+
+
+## ACF plots
+par(mfrow=c(2,2))
+acf(other.pars.MCMC[,1],main="mu")
+acf(other.pars.MCMC[,2],main="sigma2")
+acf(other.pars.MCMC[,3],main="tau2")
+
+par(mfrow=c(2,2))
+acf(theta.MCMC[,1],main="theta_1")
+acf(theta.MCMC[,2],main="theta_2")
+acf(theta.MCMC[,3],main="theta_3")
+acf(theta.MCMC[,4],main="theta_4")
+
+par(mfrow=c(2,2))
+acf(theta.MCMC[,5],main="theta_5")
+acf(theta.MCMC[,6],main="theta_6")
+acf(theta.MCMC[,7],main="theta_7")
+acf(theta.MCMC[,8],main="theta_8")
+
+
+burnin <- 5000  ## as a safe choice??
+L <- 5000  ## ???
+
+
+## Box-plots of MCMC samples grouped in batches of L=1000 samples
+batch <- rep(seq(1:19),each=L)
+par(mfrow=c(1,1))
+boxplot(other.pars.MCMC[(burnin+1):S,1]~batch,ylab="Mu",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(other.pars.MCMC[(burnin+1):S,2]~batch,ylab="Sigma2",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(other.pars.MCMC[(burnin+1):S,3]~batch,ylab="Tau2",xlab="Batch",col="grey")
+
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,1]~batch,ylab="Theta_1",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,2]~batch,ylab="Theta_2",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,3]~batch,ylab="Theta_3",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,4]~batch,ylab="Theta_4",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,5]~batch,ylab="Theta_5",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,6]~batch,ylab="Theta_6",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,7]~batch,ylab="Theta_7",xlab="Batch",col="grey")
+par(mfrow=c(1,1))
+boxplot(theta.MCMC[(burnin+1):S,8]~batch,ylab="Theta_8",xlab="Batch",col="grey")
+```
+
+### 1.c
+
+Marginal posterior densities for each theta_j
+```{r 1c}
+par(mfrow=c(2,2))
+
+plot(density(theta.MCMC[(burnin+1):S,1]),col="black",lwd=2,lty=1,xlab="Theta_1",ylab="Posterior density",main="Theta_1")
+abline(v=quantile(theta.MCMC[(burnin+1):S,1],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,1],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,1]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,1]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,2]),col="black",lwd=2,lty=1,xlab="Theta_2",ylab="Posterior density",main="Theta_2")
+abline(v=quantile(theta.MCMC[(burnin+1):S,2],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,2],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,2]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,2]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,3]),col="black",lwd=2,lty=1,xlab="Theta_3",ylab="Posterior density",main="Theta_3")
+abline(v=quantile(theta.MCMC[(burnin+1):S,3],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,3],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,3]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,3]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,4]),col="black",lwd=2,lty=1,xlab="Theta_4",ylab="Posterior density",main="Theta_4")
+abline(v=quantile(theta.MCMC[(burnin+1):S,4],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,4],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,4]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,4]),col="red",lwd=2,lty=1)
+
+par(mfrow=c(2,2))
+
+plot(density(theta.MCMC[(burnin+1):S,5]),col="black",lwd=2,lty=1,xlab="Theta_5",ylab="Posterior density",main="Theta_5")
+abline(v=quantile(theta.MCMC[(burnin+1):S,5],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,5],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,5]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,5]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,6]),col="black",lwd=2,lty=1,xlab="Theta_6",ylab="Posterior density",main="Theta_6")
+abline(v=quantile(theta.MCMC[(burnin+1):S,6],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,6],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,6]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,6]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,7]),col="black",lwd=2,lty=1,xlab="Theta_7",ylab="Posterior density",main="Theta_7")
+abline(v=quantile(theta.MCMC[(burnin+1):S,7],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,7],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,7]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,7]),col="red",lwd=2,lty=1)
+
+
+plot(density(theta.MCMC[(burnin+1):S,8]),col="black",lwd=2,lty=1,xlab="Theta_8",ylab="Posterior density",main="Theta_8")
+abline(v=quantile(theta.MCMC[(burnin+1):S,8],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(theta.MCMC[(burnin+1):S,8],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(theta.MCMC[(burnin+1):S,8]),col="purple",lwd=2,lty=1)
+abline(v=mean(theta.MCMC[(burnin+1):S,8]),col="red",lwd=2,lty=1)
+```
+Marginal posterior summaries for each theta_j
+```{r}
+for (i in 1:8) {
+  print(paste0("The posterior mean of subsidiary_", i, " is ",
+              round(mean(theta.MCMC[(burnin+1):S,i]), 3),
+               ", with 95% CI = [",
+               round(quantile(sqrt(theta.MCMC[(burnin+1):S,i]),c(0.025,0.975))[1], 3),
+               ",",
+               round(quantile(sqrt(theta.MCMC[(burnin+1):S,i]),c(0.025,0.975))[2], 3),
+               "]"))
+}
+```
+
+
+### 1.d
+```{r 1d}
+high_chol <- numeric()
+low_chol <- numeric()
+theta.post <- theta.MCMC[(burnin+1):S,]
+l <- dim(theta.post)[1]
+for (i in 1:l) {
+  high_chol[i] <- which.max(theta.post[i,])
+  low_chol[i] <- which.min(theta.post[i,])
+}
+table(high_chol)/l
+which.max(table(high_chol)/l)
+table(low_chol)/l
+which.max(table(low_chol)/l)
+```
+From the result above we see that the 5th subsidiary has the highest posterior probability of having employees with the highest cholesterol intake.\
+The 6th subsidiary is more likely to have employees with the lowest cholesterol intake per day.
+
+
+### 1.e
+
+posterior inference on the population average level of cholesterol intake
+```{r 1e}
+plot(density(other.pars.MCMC[(burnin+1):S,1]),col="black",lwd=2,lty=1,xlab="Mu",ylab="Posterior density",main="Mu")
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,1],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,1],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,1]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,1]),col="red",lwd=2,lty=1)
+```
+Posterior mean of the population average level of cholesterol intake is `r round(mean(other.pars.MCMC[(burnin+1):S,1]), 3)`, with 95% credible interval [`r round(quantile(other.pars.MCMC[(burnin+1):S,1],0.025), 3)`, `r round(quantile(other.pars.MCMC[(burnin+1):S,1],0.975), 3)`].
+
+
+### 1.f
+
+Within-group variability is indicated by sigma2
+```{r 1f}
+plot(density(other.pars.MCMC[(burnin+1):S,2]),col="black",lwd=2,lty=1,xlab="Sigma2",ylab="Posterior density",main="Sigma2")
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,2],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,2],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,2]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,2]),col="red",lwd=2,lty=1)
+```
+Posterior mean of sigma2 is `r round(mean(other.pars.MCMC[(burnin+1):S,2]), 3)`, with 95% credible interval [`r round(quantile(other.pars.MCMC[(burnin+1):S,2],0.025), 3)`, `r round(quantile(other.pars.MCMC[(burnin+1):S,2],0.975), 3)`].\
+
+
+Between-group variability is indicated by tau2
+```{r}
+plot(density(other.pars.MCMC[(burnin+1):S,3]),col="black",lwd=2,lty=1,xlab="Tau2",ylab="Posterior density",main="Tau2", xlim = range(1:5000))
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,3],0.025),col="blue",lwd=2,lty=3)
+abline(v=quantile(other.pars.MCMC[(burnin+1):S,3],0.975),col="blue",lwd=2,lty=3)
+abline(v=median(other.pars.MCMC[(burnin+1):S,3]),col="purple",lwd=2,lty=1)
+abline(v=mean(other.pars.MCMC[(burnin+1):S,3]),col="red",lwd=2,lty=1)
+```
+Posterior mean of tau2 is `r round(mean(other.pars.MCMC[(burnin+1):S,3]), 3)`, with 95% credible interval [`r round(quantile(other.pars.MCMC[(burnin+1):S,3],0.025), 3)`, `r round(quantile(other.pars.MCMC[(burnin+1):S,3],0.975), 3)`].\
+
+
+From the results above we conclude that the data suggests there is more within-subsidiary variability than between-subsidiary variability, since the posterior mean of sigma2 is bigger, and its 95% CI lower bound is still higher than the tau2 95% CI upper bound.\
+
+
+### 1.g
+```{r 1g}
+## Theta
+post.mean.theta <- apply(theta.MCMC[(burnin+1):S,],2,mean)
+
+plot(y.bar.sub,post.mean.theta,
+     xlab="Subsidiary-specific sample average (ybar_j)",
+     ylab="Posterior mean of theta_j",type="p",
+     col="grey",pch=20,main="Posterior mean of theta_j versus ybar_j")
+abline(a=0,b=1,col="black")
+
+plot(n.j,post.mean.theta-y.bar.sub,
+     xlab="Sample size for subsidiary j: n_j",
+     ylab="Posterior mean of theta_j-ybar_j",
+     type="p",col="grey",pch=20,
+     main="Posterior mean of theta_j minus ybar_j versus sample size n_j")
+abline(h=0,col="black")
+
+```
+Shrinkage means the expected value of theta_j is pulled from the subsidiary-specific sample average ybar_j towards the overall average mu by an amount that depends on n_j.\
+
+The plot of "Posterior mean of theta_j versus ybar_j" indicates that there exists a large level of shrinkage since most dots are being dragged away from the sample average (the 45 degree line). The farther the dots are from the 45 degree line, the stronger the shrinkage.\
+
+Theoretically, the smaller n_j, the stronger shrinkage. But from the "Posterior mean of theta_j minus ybar_j versus sample size n_j" plot, such difference is moderate. Probably because only data for 8 subsidiaries is available and the difference in their sample size is not that significant.
+
+
+## 2
+
+data
+```{r}
+nail <- read.csv("~/Documents/NYU/bayesian/final/toenail.txt", sep="")
+head(nail)
+id <- nail$id
+m <- length(unique(id))
+y <- nail$response
+n <- length(y)
+time <- nail$time
+treat <- nail$treat
+t.treat <- time * treat
+p <- 3
+X <- matrix(cbind(rep(1,n),time, t.treat),nrow=n,ncol=p)
+n.j <- as.numeric(table(id))
+```
+
+### 2.a
+
+Fit a linear regression using semi-conjugate prior
+```{r 2a}
+Xprime.X <- t(X)%*%X
+Xprime.y <- t(X)%*%matrix(y,nrow=n,ncol=1)
+
+## OLS estimates
+beta.ols <- solve(Xprime.X)%*%Xprime.y
+sigma2.ols <- (1/(n-p))*t(y-X%*%beta.ols)%*%(y-X%*%beta.ols)
+### use ols estimates to start mcmc
+
+## Prior parameters
+
+## prior parameters for beta
+beta0 <- c(2.5, 0.6, 0)
+Sigma0 <- 100 * diag(3)
+
+## prior precision matrix
+iSigma0 <- solve(Sigma0)
+## prior precision times prior mean
+iSigma0beta0 <- iSigma0%*%matrix(beta0,nrow=p,ncol=1)
+
+## prior parameters for sigma2
+nu0 <- 2
+sigma2.0 <- 3.7 * 2 / nu0
+
+nu.n <- nu0+n
+```
+
+functions to sample from full conditionals
+```{r}
+sample.beta <- function(y,sigma2,Xprime.X,Xprime.y,iSigma0,iSigma0beta0){
+	
+	post.var <- solve(iSigma0+(Xprime.X/sigma2))
+	post.mean <- post.var%*%(iSigma0beta0+(Xprime.y/sigma2))
+	new.beta <- mvrnorm(1,post.mean,post.var)
+	return(new.beta)
+}
+
+sample.sigma2 <- function(y,X,beta,nu.n,nu0,sigma2.0,p,n){
+	
+	ss.residuals <- t(y-X%*%matrix(beta,nrow=p,ncol=1))%*%(y-X%*%matrix(beta,nrow=p,ncol=1))
+	sigma2.n <- 1/(nu.n)*((nu0*sigma2.0)+ss.residuals)
+	new.sigma2 <- 1/rgamma(1,nu.n/2,(nu.n*sigma2.n)/2)
+	return(new.sigma2)
+}
+```
+
+Gibbs
+```{r gibbs_2a}
+S <- 10000
+
+output.MCMC <- matrix(0,S,p+1)  ## 1st col: sigma2; 2nd - 4th col: beta 0-2
+
+## Initial values
+init.beta <- c(0,0,0)
+init.sigma2 <- var(y)
+
+set.seed(0)
+for(i in 1:S){
+	
+	if(i==1){
+		output.MCMC[i,1] <- init.sigma2
+		output.MCMC[i,2:(p+1)] <- init.beta
+	}
+	if(i>1){
+		output.MCMC[i,1] <- sample.sigma2(y,X,output.MCMC[(i-1),(2:(p+1))],nu.n,nu0,sigma2.0,p,n)
+		output.MCMC[i,2:(p+1)] <- sample.beta(y,output.MCMC[i,1],Xprime.X,Xprime.y,iSigma0,iSigma0beta0)
+	}
+
+}
+
+```
+
+diagnostics
+```{r diagnostics_2a}
+### Examining trace plots, autocorrelation functions and effective sample size
+par(mfrow=c(2,2))
+plot(output.MCMC[,1],xlab="Iteration number",ylab="sigma2",type="l",col="black")
+plot(output.MCMC[,2],xlab="Iteration number",ylab="Beta_0",type="l",col="black")
+plot(output.MCMC[,3],xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+plot(output.MCMC[,4],xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+
+
+## ACF
+par(mfrow=c(2,2))
+acf(output.MCMC[,1],main="sigma2")
+acf(output.MCMC[,2],main="Beta_0")
+acf(output.MCMC[,3],main="Beta_1")
+acf(output.MCMC[,4],main="Beta_2")
+
+
+## effective sample size
+effectiveSize(output.MCMC[,1])
+effectiveSize(output.MCMC[,2])
+effectiveSize(output.MCMC[,3])
+effectiveSize(output.MCMC[,4])
+
+
+burnin <- 1000   # conservative choice for safety
+```
+
+posterior inference
+```{r post}
+par(mfrow=c(2,2))
+
+plot(density(output.MCMC[(burnin+1):S,1]),col="black",main="sigma2")
+abline(v=mean(output.MCMC[(burnin+1):S,1]),col="red",lwd=2,lty=1)
+abline(v=quantile(output.MCMC[(burnin+1):S,1],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output.MCMC[(burnin+1):S,1],0.975),lty=3,lwd=2,col="red")
+
+plot(density(output.MCMC[(burnin+1):S,2]),col="black",main="Beta_0")
+abline(v=mean(output.MCMC[(burnin+1):S,2]),col="red",lwd=2,lty=1)
+abline(v=beta.ols[1],col="blue",lwd=2,lty=1)
+abline(v=beta0[1],col="grey",lwd=2,lty=1)
+abline(v=quantile(output.MCMC[(burnin+1):S,2],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output.MCMC[(burnin+1):S,2],0.975),lty=3,lwd=2,col="red")
+
+plot(density(output.MCMC[(burnin+1):S,3]),col="black",main="Beta_1")
+abline(v=mean(output.MCMC[(burnin+1):S,3]),col="red",lwd=2,lty=1)
+abline(v=beta.ols[2],col="blue",lwd=2,lty=1)
+abline(v=beta0[2],col="grey",lwd=2,lty=1)
+abline(v=quantile(output.MCMC[(burnin+1):S,3],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output.MCMC[(burnin+1):S,3],0.975),lty=3,lwd=2,col="red")
+
+plot(density(output.MCMC[(burnin+1):S,4]),col="black",main="Beta_2")
+abline(v=mean(output.MCMC[(burnin+1):S,4]),col="red",lwd=2,lty=1)
+abline(v=beta.ols[3],col="blue",lwd=2,lty=1)
+abline(v=beta0[3],col="grey",lwd=2,lty=1)
+abline(v=quantile(output.MCMC[(burnin+1):S,4],0.025),lty=3,lwd=2,col="red")
+abline(v=quantile(output.MCMC[(burnin+1):S,4],0.975),lty=3,lwd=2,col="red")
+```
+
+#### i.
+To determine whether the unaffected toe nail grows significantly over time, we need to check on the beta_1.\
+Posterior mean of beta_1 is `r round(mean(output.MCMC[(burnin+1):S,3]), 3)`, with 95% credible interval [`r round(quantile(output.MCMC[(burnin+1):S,3],0.025), 3)`, `r round(quantile(output.MCMC[(burnin+1):S,3],0.975), 3)`].\
+Beta_1 is significantly greater than 0, thus we can conclude that the unaffected toe nail grows significantly over time.
+
+#### ii.
+To determine whether there is a difference between the two treatments over time, we need to check on the beta_2.\
+Posterior mean of beta_2 is `r round(mean(output.MCMC[(burnin+1):S,4]), 3)`, with 95% credible interval [`r round(quantile(output.MCMC[(burnin+1):S,4],0.025), 3)`, `r round(quantile(output.MCMC[(burnin+1):S,4],0.975), 3)`].\
+Beta_2 is significantly greater than 0, thus we can conclude that there is a difference between the two treatments over time.\
+
+
+### 2.b
+
+Itraconazol group (treat = 0)
+```{r}
+## ols estimate
+nail.0 <- nail[c(nail$treat == 0),]
+id.0 <- nail.0$id
+y.0 <- nail.0$response
+t.0 <- nail.0$time
+m <- length(unique(nail.0$id))
+p <- 2
+
+beta.ols.0 <- matrix(0,nrow=m,ncol=p)
+for(j in 1:m){
+	y.j <- y.0[which(id.0==unique(id.0)[j])]
+	t.j <- t.0[which(id.0==unique(id.0)[j])]
+	reg.j <- lm(y.j ~ t.j)
+	beta.ols.0[j,] <- as.numeric(reg.j$coeff)
+}
+beta.ols.0 <- na.omit(beta.ols.0)
+
+## plot
+plot(seq(0,50,length=1000),
+     beta.ols.0[1,1]+beta.ols.0[1,2]*seq(0,50,length=1000),
+     xlab="Time",ylab="Nail growth", main = "Itraconazol group",
+     col="grey",type="l", ylim=c(0,24), xlim = c(0,15))
+
+l <- dim(beta.ols.0)[1]
+for(j in 2:l){
+ lines(seq(0,50,length=1000),lwd=1,col="grey",
+       beta.ols.0[j,1]+beta.ols.0[j,2]*seq(0,50,length=1000), ylim=c(0,24), xlim = c(0,15))
+}
+lines(seq(0,50,length=1000),col="black",lwd=3,
+      mean(beta.ols.0[,1])+mean(beta.ols.0[,2])*seq(0,50,length=1000), ylim=c(0,24), xlim = c(0,15))
+
+```
+
+
+Lamisil group (treat = 1)
+```{r}
+## ols estimate
+nail.1 <- nail[c(nail$treat == 1),]
+id.1 <- nail.1$id
+y.1 <- nail.1$response
+t.1 <- nail.1$time
+m <- length(unique(nail.1$id))
+p <- 2
+
+beta.ols.1 <- matrix(1,nrow=m,ncol=p)
+for(j in 1:m){
+	y.j <- y.1[which(id.1==unique(id.1)[j])]
+	t.j <- t.1[which(id.1==unique(id.1)[j])]
+	reg.j <- lm(y.j ~ t.j)
+	beta.ols.1[j,] <- as.numeric(reg.j$coeff)
+}
+beta.ols.1 <- na.omit(beta.ols.1)
+
+## plot
+plot(seq(0,50,length=1000),
+     beta.ols.1[1,1]+beta.ols.1[1,2]*seq(0,50,length=1000),
+     xlab="Time",ylab="Nail growth", main = "Lamisil group",
+     col="grey",type="l", ylim=c(-20,80))
+
+l <- dim(beta.ols.1)[1]
+for(j in 2:l){
+ lines(seq(0,50,length=1000),lwd=1,col="grey",
+       beta.ols.1[j,1]+beta.ols.1[j,2]*seq(0,50,length=1000), ylim=c(-20,80))
+}
+lines(seq(0,50,length=1000),col="black",lwd=3,
+      mean(beta.ols.1[,1])+mean(beta.ols.1[,2])*seq(0,50,length=1000), ylim=c(-20,80))
+
+```
+In both the plots we observe that the regression lines between time and nail growth for each patient (grey lines) vary greatly, spreading out in both directions from the average line (black line). This indicates that there exist within-group variability in both treatment groups. However, the slopes in Itraconazol group are generally positive, while in the Lamisil group, there are a few slopes less than 0, representing the negative correlation with nail growth and time.\
+
+More specifically, samples in the Itraconazol group have more variablity in the initial values, while the Lamisil group have similar initial value.\
+
+
+
+### 2.c
+
+Fit the hierachical linear mixed model:\
+
+Use MCMCpack
+```{r}
+nail$ttreat <- time * treat
+
+model <- MCMChregress(fixed = response ~ time + ttreat,
+                      random = ~ time,
+                      group = "id",
+                      data = nail,
+                      burnin = 2000,
+                      mcmc = 20000,
+                      thin = 1, verbose = 0,
+                      seed = 0,
+                      mubeta = c(2.5, 0.6, 0),
+                      Vbeta = 100 * diag(3),
+                      r = 4,
+                      R = 0.1 * diag(2),
+                      nu = 2,
+                      delta = 3.7)
+
+```
+
+Posterior inference
+```{r}
+burnin = 2000
+
+## beta_0 (intercept)
+mcmc.beta.0 <- as.numeric(model$mcmc[(burnin+1):20000,"beta.(Intercept)"])
+effectiveSize(mcmc.beta.0)
+plot(mcmc.beta.0,xlab="Iteration number",ylab="Beta_0",type="l",col="black")
+acf(mcmc.beta.0)
+mean(mcmc.beta.0)
+quantile(mcmc.beta.0,0.025)
+quantile(mcmc.beta.0,0.975)
+
+## beta_1 (time)
+mcmc.beta.1 <- as.numeric(model$mcmc[(burnin+1):20000,"beta.time"])
+effectiveSize(mcmc.beta.1)
+plot(mcmc.beta.1,xlab="Iteration number",ylab="Beta_1",type="l",col="black")
+acf(mcmc.beta.1)
+mean(mcmc.beta.1)
+quantile(mcmc.beta.1,0.025)
+quantile(mcmc.beta.1,0.975)
+
+## beta_2 (time * treat)
+mcmc.beta.2 <- as.numeric(model$mcmc[(burnin+1):20000,"beta.ttreat"])
+effectiveSize(mcmc.beta.2)
+plot(mcmc.beta.2,xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+acf(mcmc.beta.2)
+mean(mcmc.beta.2)
+quantile(mcmc.beta.2,0.025)
+quantile(mcmc.beta.2,0.975)
+
+
+## sigma2 
+mcmc.sigma2 <- as.numeric(model$mcmc[(burnin+1):20000,"sigma2"])
+effectiveSize(mcmc.sigma2)
+plot(mcmc.sigma2,xlab="Iteration number",ylab="Beta_2",type="l",col="black")
+acf(mcmc.sigma2)
+mean(mcmc.sigma2)
+quantile(mcmc.sigma2,0.025)
+quantile(mcmc.sigma2,0.975)
+```
+
+Beta_1 (time) is significantly greater than 0 (mean = 0.58, 95% CI = [0.43, 0.73]), thus there is evidence for an increase in the unaffected toenail length over time. \
+The 95% CI of beta_2 (for time * treat) includes 0 (mean = 0.06, 95% CI = [-0.15, 0.26]), indicating that the coefficient is not significant. There is no evidence that the two treatments have a different effect over time.
+
+
+### 2.d 
+
+compare the density distribution of beta_1 from fixed model and mixed model
+```{r 2d}
+beta_fix <- data.frame(beta = density(output.MCMC[(burnin+1):S,3], n = 5000)$x, 
+                       density = density(output.MCMC[(burnin+1):S,3], n = 5000)$y,
+                       distribution = "fixed")
+beta_mix <- data.frame(beta = mcmc.beta.1, distribution = "mixed")
+
+ggplot(beta_fix, aes(x = beta,y = density, colour = distribution)) +
+  geom_line() + 
+  geom_density(beta_mix, mapping = aes(x = beta, y = ..density..)) +
+  xlab('Beta_1')
+```
+The mean beta_1 value in two models are close, but there is bigger variance for the mixed model beta_1.\
+For the fixed effect model, the variance is smaller, showing that the patients' nail growth would maintain in a relatively stable pace, while in the fixed model, the nail growth would vary person by person.\
+Thus we conclude that there exists variability among different patients in the way their unaffected toenail grows over time.
+
+
+### 2.e
+
+```{r 2e}
+treat <- c(rep(0, 7), rep(1, 7))
+X.pred <- data.frame(inter = rep(1,14),
+                     time = rep(c(0, 1, 2, 3, 6, 9, 12), 2))
+X.pred$ttreat <- X.pred$time * treat
+X.pred <- as.matrix(X.pred)
+
+## use posterior estimated parameters from model (2) to do prediction
+pred.beta <- matrix(c(mcmc.beta.0, mcmc.beta.1, mcmc.beta.2), nrow=length(mcmc.beta.0),ncol=3, byrow = F)
+
+pred.y <- matrix(0, 14, dim(pred.beta)[1])
+for(k in 1:dim(pred.beta)[1]){
+	pred.y[,k] <- X.pred %*% matrix(pred.beta[k,],3,1)
+}
+
+```
+
+Itraconzol (treat = 0)
+```{r}
+pred.y.0 <- pred.y[c(1:7),]
+pred.y.0.plt <- data.frame(time = c(0, 1, 2, 3, 6, 9, 12),
+                           mean = apply(pred.y.0, 1, mean),
+                           lower = rep(0,7),
+                           upper = rep(0,7))
+for (i in 1:7) {
+  pred.y.0.plt[i,3] <- quantile(pred.y.0[i,], 0.025)
+  pred.y.0.plt[i,4] <- quantile(pred.y.0[i,], 0.975)
+}
+
+pred.y.0.plt
+
+ggplot(pred.y.0.plt, aes(time, mean))+
+  geom_point()+
+  geom_line(data=pred.y.0.plt)+
+  geom_ribbon(data=pred.y.0.plt,aes(ymin=lower,ymax=upper),alpha=0.3)+
+  ylab("Nail") +
+  ggtitle("Itraconzol (treat = 0)")
+
+```
+
+
+Lamisil (treat = 1)
+```{r}
+pred.y.1 <- pred.y[c(8:14),]
+pred.y.1.plt <- data.frame(time = c(0, 1, 2, 3, 6, 9, 12),
+                           mean = apply(pred.y.1, 1, mean),
+                           lower = rep(0,7),
+                           upper = rep(0,7))
+for (i in 1:7) {
+  pred.y.1.plt[i,3] <- quantile(pred.y.1[i,], 0.025)
+  pred.y.1.plt[i,4] <- quantile(pred.y.1[i,], 0.975)
+}
+
+pred.y.1.plt
+
+ggplot(pred.y.1.plt, aes(time, mean))+
+  geom_point()+
+  geom_line(data=pred.y.1.plt)+
+  geom_ribbon(data=pred.y.1.plt,aes(ymin=lower,ymax=upper),alpha=0.3)+
+  ylab("Nail") +
+  ggtitle("Lamisil (treat = 1)")
+
+```
+
+
+## 3.
+
+### 3.a
+
+This is a two-level generalized hierarchical poisson model.\
+
+The first stage `Y_i | theta_i, x_i ~ Poisson(theta_i * x_i)` measures the within-group variability, which is the variability in each country. The `Y_i` and `x_i` are the sample data, so this stage also include the information of data and therefore the observed disease rate, which is $Y_i / x_i$.\
+
+The second stage `theta_1, ..., theta_6 | a,b ~ gamma(a, b)` measures the between-group variability and allows for between-group information sharing. At this level we assume all theta have the same distribution, and represents the expected disease rate, which is `theta_i`.\
+
+The rest are prior distributions of the parameters depending on hyperparameters. The a and b are parameters that help decide the distribution of `theta`.

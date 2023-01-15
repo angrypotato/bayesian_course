@@ -1,0 +1,725 @@
+---
+title: "Bayesian HW3"
+author: "Xiaoting Chen"
+date: "2022-10-30"
+output: pdf_document
+---
+
+```{r setup, include=T, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MCMCpack)
+library(MASS)
+library(ggplot2)
+library(tidyverse)
+
+sample.theta <- function(ybar,mu0,Lambda0,n,Sigma){
+
+	# prior precision matrix
+	iLambda0 <- solve(Lambda0)
+	
+	# data precision matrix
+	iSigma <- solve(Sigma)
+	
+	# posterior precision matrix
+	post.prec <- n*iSigma + iLambda0
+	
+	# posterior variance matrix
+	post.var <- solve(post.prec)
+	
+	# posterior mean
+	post.mean <- post.var%*%(iLambda0%*%mu0 + n*iSigma%*%ybar)
+	
+	new.theta <- mvrnorm(1,post.mean,post.var)
+	return(new.theta)
+}
+
+
+sample.Sigma <- function(y,theta,n,nu0,Phi0){
+	
+	# posterior degrees of freedom
+	nu.n <- n+nu0
+	
+	
+	# residual sum of squares
+	rss <- (t(y)-theta)%*%t(t(y)-theta)
+	# Phi.n
+	Phi.n <- Phi0+rss
+	
+	new.iSigma <- rwish(nu.n,solve(Phi.n))
+	new.Sigma <- solve(new.iSigma)
+	return(new.Sigma)
+}
+```
+
+## 7.3
+
+### 7.3.a
+```{r}
+### blue crab
+
+bluecrab <- as.matrix(read.table("~/Documents/NYU/bayesian/hw/hw3/bluecrab.dat", quote="\"", comment.char=""))
+
+## number of observations
+n <- dim(bluecrab)[1]
+## ybar vector
+ybar <- apply(bluecrab,2,mean)
+## matrix with sample variances and covariances
+S2 <- cov(bluecrab)
+
+## parameters of prior distribution
+mu0 <- ybar
+Lambda0 <- S2
+nu0 <- 4
+Phi0 <- Lambda0
+
+## Gibbs sampling algorithm
+
+S <- 10000
+blue.theta.MC <- matrix(0,S,2)
+blue.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		blue.theta.MC[i,] <- ybar
+		blue.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		blue.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,blue.Sigma.MC[,,(i-1)])	
+		blue.Sigma.MC[,,i] <- sample.Sigma(bluecrab,blue.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+## Trace plot
+
+par(mfrow=c(1,2))
+plot(blue.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(blue.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(blue.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(blue.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(blue.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+### From the traceplots, it seems none of the chains is mixing poorly or they have converged very quickly
+
+
+##  ACF plot
+
+par(mfrow=c(1,2))
+acf(blue.theta.MC[,1],main="Theta_1")
+acf(blue.theta.MC[,2],main="Theta_2")
+### The autocorrelation is not significantly different from 0
+
+par(mfrow=c(1,3))
+acf(blue.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(blue.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(blue.Sigma.MC[1,2,],main="Sigma_12")
+### The autocorrelation is not significantly different from 0
+
+
+## Posterior summaries
+
+## difference between body depth and rear width
+burnin <- 5000
+quantile(blue.theta.MC[((burnin+1):S),2]-blue.theta.MC[((burnin+1):S),1],c(0.025,0.975))
+mean(blue.theta.MC[((burnin+1):S),2]-blue.theta.MC[((burnin+1):S),1])
+median(blue.theta.MC[((burnin+1):S),2]-blue.theta.MC[((burnin+1):S),1])
+sd(blue.theta.MC[((burnin+1):S),2]-blue.theta.MC[((burnin+1):S),1])
+
+## correlation between body depth and rear width
+quantile(blue.Sigma.MC[1,2,((burnin+1):S)]/sqrt(blue.Sigma.MC[1,1,((burnin+1):S)]*blue.Sigma.MC[2,2,((burnin+1):S)]),c(0.025,0.975))
+mean(blue.Sigma.MC[1,2,((burnin+1):S)]/sqrt(blue.Sigma.MC[1,1,((burnin+1):S)]*blue.Sigma.MC[2,2,((burnin+1):S)]))
+median(blue.Sigma.MC[1,2,((burnin+1):S)]/sqrt(blue.Sigma.MC[1,1,((burnin+1):S)]*blue.Sigma.MC[2,2,((burnin+1):S)]))
+sd(blue.Sigma.MC[1,2,((burnin+1):S)]/sqrt(blue.Sigma.MC[1,1,((burnin+1):S)]*blue.Sigma.MC[2,2,((burnin+1):S)]))
+```
+
+```{r}
+### orange crab
+
+orangecrab <- as.matrix(read.table("~/Documents/NYU/bayesian/hw/hw3/orangecrab.dat", quote="\"", comment.char=""))
+
+## number of observations
+n <- dim(orangecrab)[1]
+## ybar vector
+ybar <- apply(orangecrab,2,mean)
+## matrix with sample variances and covariances
+S2 <- cov(orangecrab)
+
+## parameters of prior distribution
+mu0 <- ybar
+Lambda0 <- S2
+nu0 <- 4
+Phi0 <- Lambda0
+
+## Gibbs sampling algorithm
+
+S <- 10000
+orange.theta.MC <- matrix(0,S,2)
+orange.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		orange.theta.MC[i,] <- ybar
+		orange.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		orange.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,orange.Sigma.MC[,,(i-1)])	
+		orange.Sigma.MC[,,i] <- sample.Sigma(orangecrab,orange.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+## Trace plot
+
+par(mfrow=c(1,2))
+plot(orange.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(orange.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(orange.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(orange.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(orange.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+
+##  ACF plot
+
+par(mfrow=c(1,2))
+acf(orange.theta.MC[,1],main="Theta_1")
+acf(orange.theta.MC[,2],main="Theta_2")
+
+par(mfrow=c(1,3))
+acf(orange.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(orange.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(orange.Sigma.MC[1,2,],main="Sigma_12")
+
+
+## Posterior summaries
+
+## difference between body depth and rear width
+burnin <- 5000
+quantile(orange.theta.MC[((burnin+1):S),2]-orange.theta.MC[((burnin+1):S),1],c(0.025,0.975))
+mean(orange.theta.MC[((burnin+1):S),2]-orange.theta.MC[((burnin+1):S),1])
+median(orange.theta.MC[((burnin+1):S),2]-orange.theta.MC[((burnin+1):S),1])
+sd(orange.theta.MC[((burnin+1):S),2]-orange.theta.MC[((burnin+1):S),1])
+
+## correlation between body depth and rear width
+quantile(orange.Sigma.MC[1,2,((burnin+1):S)]/sqrt(orange.Sigma.MC[1,1,((burnin+1):S)]*orange.Sigma.MC[2,2,((burnin+1):S)]),c(0.025,0.975))
+mean(orange.Sigma.MC[1,2,((burnin+1):S)]/sqrt(orange.Sigma.MC[1,1,((burnin+1):S)]*orange.Sigma.MC[2,2,((burnin+1):S)]))
+median(orange.Sigma.MC[1,2,((burnin+1):S)]/sqrt(orange.Sigma.MC[1,1,((burnin+1):S)]*orange.Sigma.MC[2,2,((burnin+1):S)]))
+sd(orange.Sigma.MC[1,2,((burnin+1):S)]/sqrt(orange.Sigma.MC[1,1,((burnin+1):S)]*orange.Sigma.MC[2,2,((burnin+1):S)]))
+```
+### 7.3.b
+
+```{r}
+blue <- data.frame(blue.theta.MC[5001:10000,]) %>%
+  rename(depth = X1, width = X2) %>%
+  mutate(species = "blue")
+
+orange <- data.frame(orange.theta.MC[5001:10000,]) %>%
+  rename(depth = X1, width = X2) %>%
+  mutate(species = "orange")
+
+plot.data <- rbind(blue, orange)
+
+ggplot(plot.data, aes(depth, width, color = species)) +
+  geom_point() +
+  scale_color_manual(values=c("blue", "orange"))
+```
+
+### 7.3.c
+
+```{r}
+blue.Sigma.sample <- blue.Sigma.MC[ , , c(5001:10000)]
+orange.Sigma.sample <- orange.Sigma.MC[ , , 5001:10000]
+blue.rho = orange.rho = rep(0,5000)
+
+## blue
+for (i in 1:5000) {
+  Sigma_12 <- blue.Sigma.sample[1,2,i]
+  Sigma_sq1 <- blue.Sigma.sample[1,1,i]
+  Sigma_sq2 <- blue.Sigma.sample[2,2,i]
+  
+  blue.rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+
+## orange
+for (i in 1:5000) {
+  Sigma_12 <- orange.Sigma.sample[1,2,i]
+  Sigma_sq1 <- orange.Sigma.sample[1,1,i]
+  Sigma_sq2 <- orange.Sigma.sample[2,2,i]
+  
+  orange.rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+
+## plot post density
+colors <- c("blue" = "blue", "orange" = "orange")
+ggplot() +
+  geom_histogram(aes(x = blue.rho, color = "blue"), alpha = 0.5, fill="blue") +
+  geom_histogram(aes(x = orange.rho, color = "orange"), alpha = 0.5, fill = "orange") +
+  labs(x = "rho", y = "density",color = "Legend") +
+  scale_color_manual(values = colors)
+
+
+## prob of rho_blue < rho_orange given data
+mean(blue.rho < orange.rho)
+```
+
+
+
+## 7.4
+
+### 7.4.a
+![](74a.jpeg)
+
+### 7.4.b
+ 
+```{r}
+set.seed(0)
+s <- 5   # generate 5 scatter plots
+
+mu0 <- c(50,50)
+Lambda0 <- matrix(c(156.25, 125, 125, 156.25), nrow = 2, ncol = 2, byrow = T)
+sigmas <- list()
+nu0 <- 4
+Phi0 <- Lambda0
+
+data <- array(dim = c(100, 2, 5))
+for(i in 1:s){
+  theta <- mvrnorm(1, mu0, Lambda0)
+  sigma <- solve(rwish(nu0,solve(Lambda0)))
+  data[, , i] <- mvrnorm(100, theta, sigma)
+  
+  plot.dat <- data.frame(data[, , i])
+  print(ggplot(plot.dat, aes(x = X1, y = X2)) + geom_point()) 
+}
+
+```
+
+### 7.4.c
+ 
+```{r}
+marriage <- as.matrix(read.table("agehw.dat", header = T))
+
+n <- dim(marriage)[1]
+ybar <- apply(marriage,2,mean)
+S2 <- cov(marriage)
+
+## Gibbs sampling algorithm
+S <- 10000
+mrg.theta.MC <- matrix(0,S,2)
+mrg.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		mrg.theta.MC[i,] <- ybar
+		mrg.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		mrg.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,mrg.Sigma.MC[,,(i-1)])	
+		mrg.Sigma.MC[,,i] <- sample.Sigma(marriage,mrg.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+## diagnostics
+
+### Trace plot
+par(mfrow=c(1,2))
+plot(mrg.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(mrg.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(mrg.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(mrg.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(mrg.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+### From the traceplots, it seems none of the chains is mixing poorly or they have converged very quickly
+
+###  ACF plot
+par(mfrow=c(1,2))
+acf(mrg.theta.MC[,1],main="Theta_1")
+acf(mrg.theta.MC[,2],main="Theta_2")
+### The autocorrelation is not significantly different from 0
+par(mfrow=c(1,3))
+acf(mrg.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(mrg.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(mrg.Sigma.MC[1,2,],main="Sigma_12")
+### The autocorrelation is not significantly different from 0
+
+
+## inference
+
+### drop first 5000 samples as a conservative choice
+mrg.theta.sample <- mrg.theta.MC[5001:10000,]
+mrg.Sigma.sample <- mrg.Sigma.MC[,,5001:10000]
+
+husband.age = mrg.theta.sample[,1]
+wife.age = mrg.theta.sample[,2]
+
+ggplot() +
+  geom_point(aes(x = husband.age, y = wife.age))
+
+
+## rho
+rho = rep(0,5000)
+for (i in 1:5000) {
+  Sigma_12 <- mrg.Sigma.sample[1,2,i]
+  Sigma_sq1 <- mrg.Sigma.sample[1,1,i]
+  Sigma_sq2 <- mrg.Sigma.sample[2,2,i]
+  
+  rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+ggplot(data = data.frame(rho), aes(rho)) + geom_density()
+
+
+## 95% posterior confidence intervals
+quantile(mrg.theta.sample[,1], c(.05, .95))
+quantile(mrg.theta.sample[,2], c(.05, .95))
+quantile(rho, c(.05, .95))
+```
+
+### 7.4.d.iii
+ 
+```{r}
+mu0 <- c(0,0)
+Lambda0 <- matrix(c(1e5, 0, 0, 1e5), nrow = 2, ncol = 2, byrow = T)
+nu0 <- 3
+sigma0 <- matrix(c(1000, 0, 0, 1000), nrow = 2, ncol = 2, byrow = T)
+Phi0 <- sigma0
+
+## Gibbs sampling algorithm
+S <- 10000
+mrg.theta.MC <- matrix(0,S,2)
+mrg.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		mrg.theta.MC[i,] <- ybar
+		mrg.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		mrg.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,mrg.Sigma.MC[,,(i-1)])	
+		mrg.Sigma.MC[,,i] <- sample.Sigma(marriage,mrg.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+## diagnostics
+
+### Trace plot
+par(mfrow=c(1,2))
+plot(mrg.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(mrg.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(mrg.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(mrg.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(mrg.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+### From the traceplots, it seems none of the chains is mixing poorly or they have converged very quickly
+
+###  ACF plot
+par(mfrow=c(1,2))
+acf(mrg.theta.MC[,1],main="Theta_1")
+acf(mrg.theta.MC[,2],main="Theta_2")
+### The autocorrelation is not significantly different from 0
+par(mfrow=c(1,3))
+acf(mrg.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(mrg.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(mrg.Sigma.MC[1,2,],main="Sigma_12")
+### The autocorrelation is not significantly different from 0
+
+
+## inference
+
+### drop first 5000 samples as a conservative choice
+mrg.theta.sample <- mrg.theta.MC[5001:10000,]
+mrg.Sigma.sample <- mrg.Sigma.MC[,,5001:10000]
+
+husband.age = mrg.theta.sample[,1]
+wife.age = mrg.theta.sample[,2]
+
+ggplot() +
+  geom_point(aes(x = husband.age, y = wife.age))
+
+
+## rho
+rho = rep(0,5000)
+for (i in 1:5000) {
+  Sigma_12 <- mrg.Sigma.sample[1,2,i]
+  Sigma_sq1 <- mrg.Sigma.sample[1,1,i]
+  Sigma_sq2 <- mrg.Sigma.sample[2,2,i]
+  
+  rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+ggplot(data = data.frame(rho), aes(rho)) + geom_density()
+
+
+## 95% posterior confidence intervals
+quantile(mrg.theta.sample[,1], c(.05, .95))
+quantile(mrg.theta.sample[,2], c(.05, .95))
+quantile(rho, c(.05, .95))
+```
+
+### 7.4.e
+ 
+
+```{r}
+set.seed(0)
+marriage2 <- marriage[sample(100,25),]
+```
+using my prior
+```{r}
+n <- dim(marriage2)[1]
+ybar <- apply(marriage2,2,mean)
+S2 <- cov(marriage2)
+
+## Gibbs sampling algorithm
+S <- 10000
+mrg.theta.MC <- matrix(0,S,2)
+mrg.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		mrg.theta.MC[i,] <- ybar
+		mrg.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		mrg.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,mrg.Sigma.MC[,,(i-1)])	
+		mrg.Sigma.MC[,,i] <- sample.Sigma(marriage2,mrg.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+## diagnostics
+
+### Trace plot
+par(mfrow=c(1,2))
+plot(mrg.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(mrg.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(mrg.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(mrg.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(mrg.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+### From the traceplots, it seems none of the chains is mixing poorly or they have converged very quickly
+
+###  ACF plot
+par(mfrow=c(1,2))
+acf(mrg.theta.MC[,1],main="Theta_1")
+acf(mrg.theta.MC[,2],main="Theta_2")
+### The autocorrelation is not significantly different from 0
+par(mfrow=c(1,3))
+acf(mrg.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(mrg.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(mrg.Sigma.MC[1,2,],main="Sigma_12")
+### The autocorrelation is not significantly different from 0
+
+
+## inference
+
+### drop first 5000 samples as a conservative choice
+mrg.theta.sample <- mrg.theta.MC[5001:10000,]
+mrg.Sigma.sample <- mrg.Sigma.MC[,,5001:10000]
+
+husband.age = mrg.theta.sample[,1]
+wife.age = mrg.theta.sample[,2]
+
+ggplot() +
+  geom_point(aes(x = husband.age, y = wife.age))
+
+
+## rho
+rho = rep(0,5000)
+for (i in 1:5000) {
+  Sigma_12 <- mrg.Sigma.sample[1,2,i]
+  Sigma_sq1 <- mrg.Sigma.sample[1,1,i]
+  Sigma_sq2 <- mrg.Sigma.sample[2,2,i]
+  
+  rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+ggplot(data = data.frame(rho), aes(rho)) + geom_density()
+
+
+## 95% posterior confidence intervals
+quantile(mrg.theta.sample[,1], c(.05, .95))
+quantile(mrg.theta.sample[,2], c(.05, .95))
+quantile(rho, c(.05, .95))
+```
+
+using the diffuse prior
+```{r}
+mu0 <- c(0,0)
+Lambda0 <- matrix(c(1e5, 0, 0, 1e5), nrow = 2, ncol = 2, byrow = T)
+nu0 <- 3
+sigma0 <- matrix(c(1000, 0, 0, 1000), nrow = 2, ncol = 2, byrow = T)
+Phi0 <- sigma0
+
+## Gibbs sampling algorithm
+S <- 10000
+mrg.theta.MC <- matrix(0,S,2)
+mrg.Sigma.MC <- array(0,dim=c(2,2,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		mrg.theta.MC[i,] <- ybar
+		mrg.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		mrg.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,mrg.Sigma.MC[,,(i-1)])	
+		mrg.Sigma.MC[,,i] <- sample.Sigma(marriage2,mrg.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+## diagnostics
+
+### Trace plot
+par(mfrow=c(1,2))
+plot(mrg.theta.MC[,1],xlab="Iteration number",ylab="Theta_1",type="l")
+plot(mrg.theta.MC[,2],xlab="Iteration number",ylab="Theta_2",type="l")
+
+par(mfrow=c(1,3))
+plot(mrg.Sigma.MC[1,1,],xlab="Iteration number",ylab="sigma^2_1",type="l")
+plot(mrg.Sigma.MC[1,2,],xlab="Iteration number",ylab="sigma_12",type="l")
+plot(mrg.Sigma.MC[2,2,],xlab="Iteration number",ylab="sigma^2_2",type="l")
+
+### From the traceplots, it seems none of the chains is mixing poorly or they have converged very quickly
+
+###  ACF plot
+par(mfrow=c(1,2))
+acf(mrg.theta.MC[,1],main="Theta_1")
+acf(mrg.theta.MC[,2],main="Theta_2")
+### The autocorrelation is not significantly different from 0
+par(mfrow=c(1,3))
+acf(mrg.Sigma.MC[1,1,],main="Sigma^2_1")
+acf(mrg.Sigma.MC[2,2,],main="Sigma^2_2")
+acf(mrg.Sigma.MC[1,2,],main="Sigma_12")
+### The autocorrelation is not significantly different from 0
+
+
+## inference
+
+### drop first 5000 samples as a conservative choice
+mrg.theta.sample <- mrg.theta.MC[5001:10000,]
+mrg.Sigma.sample <- mrg.Sigma.MC[,,5001:10000]
+
+husband.age = mrg.theta.sample[,1]
+wife.age = mrg.theta.sample[,2]
+
+ggplot() +
+  geom_point(aes(x = husband.age, y = wife.age))
+
+
+## rho
+rho = rep(0,5000)
+for (i in 1:5000) {
+  Sigma_12 <- mrg.Sigma.sample[1,2,i]
+  Sigma_sq1 <- mrg.Sigma.sample[1,1,i]
+  Sigma_sq2 <- mrg.Sigma.sample[2,2,i]
+  
+  rho[i] <- Sigma_12 / (Sigma_sq1 * Sigma_sq2)^(1/2)
+}
+ggplot(data = data.frame(rho), aes(rho)) + geom_density()
+
+
+## 95% posterior confidence intervals
+quantile(mrg.theta.sample[,1], c(.05, .95))
+quantile(mrg.theta.sample[,2], c(.05, .95))
+quantile(rho, c(.05, .95))
+```
+When using all the data (n = 100), the 95% CI using the diffuse prior is slightly wider than using my prior; when using much smaller sample size (n = 25), the 95% CI using my prior is wider than using the diffuse prior. The diffuse prior is preferable when the sample size is small. 
+
+
+## 7.6
+
+### 7.6.a
+```{r}
+table <- read.table("azdiabetes.dat", header = T)
+dbt <- table[table$diabetes == "Yes", 1: dim(table)[2]-1]
+ndbt <- table[table$diabetes == "No",1:dim(table)[2]-1]
+
+
+# for diabetes group
+
+## prior parameters
+ybar <- apply(dbt, 2, mean)
+S2 <- cov(dbt)
+n <- dim(dbt)[1]
+mu0 <- ybar
+nu0 <- 9
+Lambda0 = Phi0 = S2
+
+S <- 10000
+dbt.theta.MC <- matrix(0,S,7)
+dbt.Sigma.MC <- array(0,dim=c(7,7,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		dbt.theta.MC[i,] <- ybar
+		dbt.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		dbt.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,dbt.Sigma.MC[,,(i-1)])	
+		dbt.Sigma.MC[,,i] <- sample.Sigma(dbt,dbt.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+
+# non-diabetes group
+
+## prior parameters
+ybar <- apply(ndbt, 2, mean)
+S2 <- cov(ndbt)
+n <- dim(ndbt)[1]
+mu0 <- ybar
+nu0 <- 9
+Lambda0 = Phi0 = S2
+
+S <- 10000
+ndbt.theta.MC <- matrix(0,S,7)
+ndbt.Sigma.MC <- array(0,dim=c(7,7,S))
+
+set.seed(0)
+for(i in 1:S){
+	if(i==1){
+		ndbt.theta.MC[i,] <- ybar
+		ndbt.Sigma.MC[,,i] <- S2
+	}
+	if(i>1){
+		ndbt.theta.MC[i,] <- sample.theta(ybar,mu0,Lambda0,n,ndbt.Sigma.MC[,,(i-1)])	
+		ndbt.Sigma.MC[,,i] <- sample.Sigma(ndbt,ndbt.theta.MC[i,],n,nu0,Phi0)
+	}
+}
+
+
+# plot
+
+prob <- NULL
+
+## orange represents non-d group, black represents diabetes group
+for (i in 1:7) {
+  cur.theta_d <- data.frame(theta = dbt.theta.MC[, i]) 
+  cur.theta_n <- data.frame(theta = ndbt.theta.MC[, i]) 
+  plt_new <- ggplot() +
+    geom_density(aes(x=theta), data = cur.theta_n, color = "orange", ) + 
+    geom_density(aes(x=theta), data = cur.theta_d, color = "black")
+  print(plt_new)
+  prob <- c(prob, mean(cur.theta_d > cur.theta_n))
+}
+## All variables seem to differ between the two groups.
+
+prob
+```
+
+### 7.6.b
+
+
